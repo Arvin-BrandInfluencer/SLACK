@@ -61,7 +61,7 @@ def format_currency(amount, market):
 thread_context_store = {}
 
 # --- API Endpoint Configuration ---
-BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:10000")
+BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
 INFLUENCER_API_URL = f"{BASE_API_URL}/api/influencer/query"
 # (Keep other URLs if you still have /monthly-review command)
 
