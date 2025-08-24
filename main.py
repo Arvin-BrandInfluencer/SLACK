@@ -9,7 +9,7 @@ from loguru import logger
 from month import handle_monthly_review_command, handle_thread_messages as month_thread_handler
 from influencer import handle_analyse_influencer_command, handle_thread_messages as influencer_thread_handler
 from trend import handle_influencer_trend_command
-# from plan import handle_plan_command, handle_thread_messages as plan_thread_handler  # Uncomment when plan.py is ready
+from plan import handle_plan_command, handle_thread_messages as plan_thread_handler
 
 # --- Loguru Configuration ---
 logger.remove()
@@ -54,12 +54,11 @@ def route_influencer_trend(ack, say, command):
     logger.info("Routing /influencer-trend command to trend.py")
     return handle_influencer_trend_command(ack, say, command)
 
-# Uncomment when plan.py is ready
-# @app.command("/plan")
-# def route_plan(ack, say, command):
-#     """Route plan command to plan.py handler"""
-#     logger.info("Routing /plan command to plan.py")
-#     return handle_plan_command(ack, say, command)
+@app.command("/plan")
+def route_plan(ack, say, command):
+    """Route plan command to plan.py handler"""
+    logger.info("Routing /plan command to plan.py")
+    return handle_plan_command(ack, say, command)
 
 # --- THREAD MESSAGE ROUTING ---
 # We need to route thread messages to the appropriate handler based on context
@@ -89,11 +88,11 @@ def route_thread_messages(event, say):
     except Exception as e:
         logger.debug(f"Influencer handler skipped thread {event['thread_ts']}: {e}")
     
-    # Add plan handler when ready
-    # try:
-    #     plan_thread_handler(event, say)
-    # except Exception as e:
-    #     logger.debug(f"Plan handler skipped thread {event['thread_ts']}: {e}")
+    # Try plan handler
+    try:
+        plan_thread_handler(event, say)
+    except Exception as e:
+        logger.debug(f"Plan handler skipped thread {event['thread_ts']}: {e}")
     
     # Note: trend.py doesn't seem to have thread handling, so we skip it
 
@@ -102,7 +101,7 @@ def route_thread_messages(event, say):
 def handle_bot_status(ack, say):
     """Simple health check command"""
     ack()
-    say("🤖 **Bot Status:** All systems operational!\n\n**Available Commands:**\n• `/monthly-review Market-Month-Year`\n• `/analyse-influencer name - [year] - [month]`\n• `/influencer-trend Market-Year-Month-Tier`")
+    say("🤖 **Bot Status:** All systems operational!\n\n**Available Commands:**\n• `/monthly-review Market-Month-Year`\n• `/analyse-influencer name - [year] - [month]`\n• `/influencer-trend Market-Year-Month-Tier`\n• `/plan Your planning query`")
 
 # --- ERROR HANDLING ---
 @app.error
@@ -117,7 +116,7 @@ if __name__ == "__main__":
     logger.info("   • /monthly-review -> month.py")
     logger.info("   • /analyse-influencer -> influencer.py") 
     logger.info("   • /influencer-trend -> trend.py")
-    # logger.info("   • /plan -> plan.py")  # Uncomment when ready
+    logger.info("   • /plan -> plan.py")
     
     try:
         handler = SocketModeHandler(app, SLACK_APP_TOKEN)
