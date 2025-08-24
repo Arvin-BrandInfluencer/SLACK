@@ -7,4 +7,4 @@ requests
 langfuse
 loguru
 google-genai
-openpxyl
+openpyxl
