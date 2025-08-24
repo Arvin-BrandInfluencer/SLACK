@@ -14,7 +14,7 @@ app = App(token=os.environ["SLACK_BOT_TOKEN"])
 genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:10000")
+BASE_API_URL = os.getenv("BASE_API_URL", "ttps://lyra-final.onrender.com")
 
 # Currency mapping
 CURRENCY_MAP = {
