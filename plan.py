@@ -36,7 +36,7 @@ except KeyError as e:
     sys.exit(1)
 
 # --- API Endpoint Configuration ---
-BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:10000")
+BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
 TARGET_API_URL = f"{BASE_API_URL}/api/dashboard/targets"
 ACTUALS_API_URL = f"{BASE_API_URL}/api/monthly_breakdown"
 DISCOVERY_API_URL = f"{BASE_API_URL}/api/discovery"
