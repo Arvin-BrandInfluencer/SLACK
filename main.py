@@ -9,7 +9,10 @@ from loguru import logger
 from month import handle_monthly_review_command, handle_thread_messages as month_thread_handler
 from influencer import handle_analyse_influencer_command, handle_thread_messages as influencer_thread_handler
 from trend import handle_influencer_trend_command
-from plan import handle_plan_command, handle_thread_messages as plan_thread_handler
+# --- MODIFIED LINE ---
+# The function for handling thread messages in your new plan module is called 'handle_thread_replies'.
+# We update the import to match it, while keeping the alias 'plan_thread_handler' for consistency.
+from plan import handle_plan_command, handle_thread_replies as plan_thread_handler
 
 # --- Loguru Configuration ---
 logger.remove()
