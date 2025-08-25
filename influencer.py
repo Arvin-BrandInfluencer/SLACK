@@ -11,16 +11,9 @@ from loguru import logger
 import pandas as pd
 
 # --- 1. CONFIGURATION & INITIALIZATION ---
-
-# --- Loguru Configuration ---
 logger.remove()
-logger.add(
-    sys.stderr,
-    format="<yellow>{time:YYYY-MM-DD HH:mm:ss}</yellow> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-    colorize=True
-)
+logger.add(sys.stderr, format="<yellow>{time:YYYY-MM-DD HH:mm:ss}</yellow> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>", colorize=True)
 
-# --- Environment & Client Initialization ---
 load_dotenv()
 try:
     GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
@@ -32,25 +25,13 @@ except KeyError as e:
     sys.exit(1)
 
 # --- CONSTANTS AND HELPERS ---
-MARKET_CURRENCY_SYMBOLS = {
-    'SWEDEN': 'SEK', 'NORWAY': 'NOK', 'DENMARK': 'DKK',
-    'UK': '£', 'FRANCE': '€', 'NORDICS': '€'
-}
-LOCAL_CURRENCY_TO_EUR_RATE = {
-    "EUR": 1.0, "GBP": 1/0.85, "SEK": 1/11.30, "NOK": 1/11.50, "DKK": 1/7.46
-}
+MARKET_CURRENCY_SYMBOLS = { 'SWEDEN': 'SEK', 'NORWAY': 'NOK', 'DENMARK': 'DKK', 'UK': '£', 'FRANCE': '€', 'NORDICS': '€' }
+LOCAL_CURRENCY_TO_EUR_RATE = { "EUR": 1.0, "GBP": 1/0.85, "SEK": 1/11.30, "NOK": 1/11.50, "DKK": 1/7.46 }
 BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
 INFLUENCER_API_URL = f"{BASE_API_URL}/api/influencer/query"
-USER_INPUT_TO_ABBR_MAP = {
-    'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr',
-    'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug',
-    'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec',
-    'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun',
-    'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec'
-}
+USER_INPUT_TO_ABBR_MAP = { 'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr', 'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug', 'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec', 'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun', 'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec' }
 
 def format_currency(amount, market):
-    """Formats a number with the correct currency symbol based on the market."""
     market_upper = str(market).upper()
     symbol = MARKET_CURRENCY_SYMBOLS.get(market_upper, '€')
     if market_upper in ['SWEDEN', 'NORWAY', 'DENMARK']:
@@ -59,7 +40,6 @@ def format_currency(amount, market):
         return f"{symbol}{amount:,.2f}"
 
 def split_message_for_slack(message: str, max_length: int = 2800) -> list:
-    """Splits long messages for Slack, preserving code blocks."""
     if len(message) <= max_length: return [message]
     chunks, current_chunk, in_code_block = [], "", False
     for line in message.split('\n'):
@@ -74,7 +54,6 @@ def split_message_for_slack(message: str, max_length: int = 2800) -> list:
     return chunks
 
 def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
-    """Generic function to query an API endpoint."""
     logger.info(f"Querying {endpoint_name} API at {url} with payload: {payload}")
     try:
         response = requests.post(url, json=payload, timeout=30)
@@ -85,7 +64,6 @@ def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
 def create_influencer_analysis_prompt(influencer_name, campaigns, summary_stats):
-    """Creates a Gemini prompt for detailed influencer analysis, respecting local currencies."""
     campaign_table_rows = []
     for c in campaigns:
         market = c.get('market', 'N/A')
@@ -145,7 +123,7 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
     Executes the influencer analysis logic and posts the results to a specific thread.
     """
     try:
-        influencer_name = params.get('influencer_name', '').strip()
+        influencer_name = str(params.get('influencer_name', '')).strip()
         if not influencer_name:
             say("❌ I need an influencer's name to run an analysis.", thread_ts=thread_ts)
             return
@@ -153,16 +131,16 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         filters = {"influencer_name": influencer_name}
         
         if 'year' in params and params['year']:
-            filters['year'] = int(params['year'])
+            filters['year'] = int(str(params['year']).strip())
         if 'month' in params and params['month']:
-            month_abbr = USER_INPUT_TO_ABBR_MAP.get(str(params['month']).lower())
+            month_abbr = USER_INPUT_TO_ABBR_MAP.get(str(params['month']).lower().strip())
             if not month_abbr:
                 say(f"❌ Invalid month provided: '{params['month']}'.", thread_ts=thread_ts)
                 return
             filters['month'] = month_abbr
 
     except (ValueError, AttributeError) as e:
-        say(f"❌ There was an issue with the parameters for the analysis. Error: {e}", thread_ts=thread_ts)
+        say(f"❌ There was an issue with the parameters provided for the analysis. Error: {e}", thread_ts=thread_ts)
         return
 
     say(f"🔎 Analyzing performance for *{influencer_name}*...", thread_ts=thread_ts)
@@ -214,7 +192,6 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         logger.error(f"Error calling Gemini API for influencer analysis: {e}")
         say(f"❌ AI analysis failed: `{str(e)}`", thread_ts=thread_ts)
 
-
 # --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
 def handle_thread_messages(event, say, context):
     """
@@ -241,7 +218,7 @@ def handle_thread_messages(event, say, context):
         **Instructions:**
         - Answer the user's question directly using only the provided JSON data.
         - Be concise and to the point.
-        - If the data needed to answer is not present, state that clearly.
+        - If the data needed is not present, state that clearly.
         - Use correct currency formatting when referencing financial data from the 'campaigns' list.
         """
         
