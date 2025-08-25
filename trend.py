@@ -90,10 +90,8 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         say(f"📊 Found **{len(all_influencers)}** influencers. Compiling leaderboards...", thread_ts=thread_ts)
         
-        thread_context_store[thread_ts] = { 'type': 'influencer_trend', 'filters': filters, 'data': all_influencers }
-        
-        currency = get_currency_symbol(filters.get('market', 'FRANCE'))
-        
+        bot_response_parts = {}
+
         # --- 1. Best by Conversions (Top 25) ---
         by_conversions = sorted(all_influencers, key=lambda x: x.get('total_conversions', 0), reverse=True)[:25]
         conv_table = "```\nTOP 25 INFLUENCERS BY CONVERSIONS\n"
@@ -106,6 +104,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             spend = inf.get('total_spend_eur', 0)
             conv_table += f"{i:2d}   | {name:<20} | {conv:8.0f}    | {cac:8.2f}   | {spend:10.2f}\n"
         conv_table += "```"
+        bot_response_parts['conversions_leaderboard'] = conv_table
         for chunk in split_message_for_slack(conv_table):
             say(text=chunk, thread_ts=thread_ts)
         
@@ -123,6 +122,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             cvr = inf.get('avg_cvr', 0) * 100
             cac_table += f"{i:2d}   | {name:<20} | {cac:8.2f}   | {conv:8.0f}    | {ctr:6.3f}%  | {cvr:6.3f}%\n"
         cac_table += "```"
+        bot_response_parts['cac_leaderboard'] = cac_table
         for chunk in split_message_for_slack(cac_table):
             say(text=chunk, thread_ts=thread_ts)
         
@@ -139,6 +139,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             conv = inf.get('total_conversions', 0)
             ctr_table += f"{i:2d}   | {name:<20} | {ctr:6.3f}%  | {views:8.0f}   | {clicks:6.0f}   | {conv:8.0f}\n"
         ctr_table += "```"
+        bot_response_parts['ctr_leaderboard'] = ctr_table
         for chunk in split_message_for_slack(ctr_table):
             say(text=chunk, thread_ts=thread_ts)
 
@@ -155,6 +156,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             spend = inf.get('total_spend_eur', 0)
             views_table += f"{i:2d}   | {name:<20} | {views:8.0f}   | {ctr:6.3f}%  | {conv:8.0f}    | {spend:10.2f}\n"
         views_table += "```"
+        bot_response_parts['views_leaderboard'] = views_table
         for chunk in split_message_for_slack(views_table):
             say(text=chunk, thread_ts=thread_ts)
         
@@ -173,6 +175,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
                 ctr = inf.get('avg_ctr', 0) * 100
                 worst_table += f"{i:2d}   | {name:<20} | {spend:9.2f}   | {views:8.0f}   | {clicks:6.0f}   | {ctr:6.3f}%\n"
             worst_table += "```"
+            bot_response_parts['worst_performers_leaderboard'] = worst_table
             for chunk in split_message_for_slack(worst_table):
                 say(text=chunk, thread_ts=thread_ts)
         
@@ -183,7 +186,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         - Total Influencers Analyzed: {len(all_influencers)}
         - Top Performer (Conversions): {by_conversions[0]['influencer_name']} with {by_conversions[0]['total_conversions']} conversions.
-        - Most Cost-Effective (CAC): {by_cac[0]['influencer_name']} with a CAC of €{by_cac[0]['effective_cac_eur']:.2f} if by_cac else 'N/A'.
+        - Most Cost-Effective (CAC): {by_cac[0]['influencer_name'] if by_cac else 'N/A'} with a CAC of €{by_cac[0]['effective_cac_eur']:.2f} if by_cac else 'N/A'.
         - Budget Waste: {len(zero_conv)} influencers generated 0 conversions, wasting a total of €{total_wasted_spend:,.2f}.
         
         Provide a concise, data-driven executive summary with the following structure:
@@ -195,9 +198,22 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         ai_response = model.generate_content(prompt)
         summary_text = f"🧠 **AI EXECUTIVE SUMMARY:**\n{ai_response.text}"
+        bot_response_parts['ai_summary'] = summary_text
         for chunk in split_message_for_slack(summary_text):
             say(text=chunk, thread_ts=thread_ts)
         
+        # Storing FULL context
+        thread_context_store[thread_ts] = {
+            'type': 'influencer_trend',
+            'filters': filters,
+            'raw_api_data': data,
+            'bot_response': bot_response_parts
+        }
+        # Refresh its position if it already exists
+        if thread_ts in thread_context_store:
+            thread_context_store.move_to_end(thread_ts)
+        logger.success(f"Full context stored for thread {thread_ts}")
+
     except Exception as e:
         logger.error(f"An unexpected error occurred in trend.py: {e}", exc_info=True)
         say(f"❌ An unexpected error occurred: {str(e)}", thread_ts=thread_ts)
@@ -219,15 +235,22 @@ def handle_thread_messages(event, say, context):
         **Original Report Context:**
         - Filters Used: {json.dumps(context.get('filters', {}))}
         
-        **Available Data (JSON, showing first 15 records):**
-        {json.dumps(context.get('data', [])[:15], indent=2)}
+        **Your Previous Analysis (for reference):**
+        ---
+        {json.dumps(context.get('bot_response', {}), indent=2)}
+        ---
+
+        **Full Raw Data Available (JSON):**
+        {json.dumps(context.get('raw_api_data', {}), indent=2)}
 
         **User's Follow-up Question:** "{user_message}"
 
         **Instructions:**
-        - Answer the user's question directly using only the provided JSON data.
+        - Answer the user's question directly using the **Full Raw Data**.
+        - Your previous analysis is for context, but base your new answer on the raw data for maximum accuracy.
+        - If the user asks for something that was in your original summary (e.g., "who was the top performer?"), you can use the 'bot_response' data to answer quickly.
+        - If they ask a new question that requires calculation (e.g., "what's the average spend for gold tier?"), compute it from the 'raw_api_data'.
         - Be concise and to the point.
-        - If the data needed is not present in the sample, state that you can only analyze the top records shown.
         """
         
         response = model.generate_content(context_prompt)
