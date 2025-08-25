@@ -10,16 +10,9 @@ import google.generativeai as genai
 from loguru import logger
 
 # --- 1. CONFIGURATION & INITIALIZATION ---
-
-# --- Loguru Configuration ---
 logger.remove()
-logger.add(
-    sys.stderr,
-    format="<yellow>{time:YYYY-MM-DD HH:mm:ss}</yellow> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-    colorize=True
-)
+logger.add(sys.stderr, format="<yellow>{time:YYYY-MM-DD HH:mm:ss}</yellow> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>", colorize=True)
 
-# --- Environment & Client Initialization ---
 load_dotenv()
 try:
     GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
@@ -31,43 +24,21 @@ except KeyError as e:
     sys.exit(1)
 
 # --- CONSTANTS AND HELPERS ---
-MARKET_CURRENCY_CONFIG = {
-    'SWEDEN':  {'rate': 11.30, 'symbol': 'SEK', 'name': 'SEK'},
-    'NORWAY':  {'rate': 11.50, 'symbol': 'NOK', 'name': 'NOK'},
-    'DENMARK': {'rate': 7.46,  'symbol': 'DKK', 'name': 'DKK'},
-    'UK':      {'rate': 0.85,  'symbol': '£',   'name': 'GBP'},
-    'FRANCE':  {'rate': 1.0,   'symbol': '€',   'name': 'EUR'},
-}
-
+MARKET_CURRENCY_CONFIG = { 'SWEDEN': {'rate': 11.30, 'symbol': 'SEK', 'name': 'SEK'}, 'NORWAY': {'rate': 11.50, 'symbol': 'NOK', 'name': 'NOK'}, 'DENMARK': {'rate': 7.46, 'symbol': 'DKK', 'name': 'DKK'}, 'UK': {'rate': 0.85, 'symbol': '£', 'name': 'GBP'}, 'FRANCE': {'rate': 1.0, 'symbol': '€', 'name': 'EUR'}, }
 BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
 TARGET_API_URL = f"{BASE_API_URL}/api/dashboard/targets"
 ACTUALS_API_URL = f"{BASE_API_URL}/api/monthly_breakdown"
-
-USER_INPUT_TO_ABBR_MAP = {
-    'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr',
-    'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug',
-    'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec',
-    'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun',
-    'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec'
-}
-
-ABBR_TO_FULL_MONTH_MAP = {
-    'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April',
-    'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August',
-    'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December'
-}
+USER_INPUT_TO_ABBR_MAP = { 'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr', 'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug', 'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec', 'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun', 'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec' }
+ABBR_TO_FULL_MONTH_MAP = { 'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April', 'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August', 'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December' }
 
 def get_currency_info(market):
-    """Get currency conversion rate and symbol for a market, defaulting to EUR."""
     return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def convert_eur_to_local(amount_eur, market):
-    """Convert an amount from EUR to the specified market's local currency."""
     currency_info = get_currency_info(market)
     return amount_eur * currency_info['rate']
 
 def format_currency(amount, market):
-    """Format an amount with the correct currency symbol and formatting for the market."""
     currency_info = get_currency_info(market)
     symbol = currency_info['symbol']
     if currency_info['name'] in ['SEK', 'NOK', 'DKK']:
@@ -76,33 +47,19 @@ def format_currency(amount, market):
         return f"{symbol}{amount:,.2f}"
 
 def split_message_for_slack(message: str, max_length: int = 2800) -> list:
-    """Split long messages into chunks that fit within Slack's limits, preserving code blocks."""
-    if len(message) <= max_length:
-        return [message]
-    
+    if len(message) <= max_length: return [message]
     chunks, current_chunk, in_code_block = [], "", False
-    lines = message.split('\n')
-    
-    for line in lines:
-        if line.strip().startswith('```'):
-            in_code_block = not in_code_block
+    for line in message.split('\n'):
+        if line.strip().startswith('```'): in_code_block = not in_code_block
         if len(current_chunk) + len(line) + 1 > max_length:
-            if in_code_block and current_chunk.strip():
-                current_chunk += "\n```"
-                in_code_block = False
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
+            if in_code_block and current_chunk: current_chunk += "\n```"; in_code_block = False
+            if current_chunk: chunks.append(current_chunk)
             current_chunk = "```\n" + line + "\n" if in_code_block else line + "\n"
-        else:
-            current_chunk += line + "\n"
-    
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-    
+        else: current_chunk += line + "\n"
+    if current_chunk: chunks.append(current_chunk)
     return chunks
 
 def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
-    """Generic function to query an API endpoint."""
     logger.info(f"Querying {endpoint_name} API at {url} with payload: {payload}")
     try:
         response = requests.post(url, json=payload, timeout=30)
@@ -113,7 +70,6 @@ def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
 def create_monthly_review_prompt(market, month, year, target_data, actual_data):
-    """Create LLM prompt for monthly performance review with market-specific currency and improved CAC logic."""
     target_budget_local = target_data.get("kpis", {}).get("total_target_budget", 0)
     metrics = actual_data.get("metrics", {})
     actual_spend_eur = metrics.get("budget_spent_eur", 0)
@@ -202,12 +158,18 @@ def create_monthly_review_prompt(market, month, year, target_data, actual_data):
 def run_monthly_review(say, thread_ts, params, thread_context_store):
     """
     Executes the monthly review logic and posts the results to a specific thread.
-    This function is now stateless and relies on inputs from main.py.
     """
     try:
-        market = params.get('market', '').strip().capitalize()
-        raw_month_input = params.get('month', '').strip()
-        year = int(params.get('year', '').strip())
+        market_str = str(params.get('market', '')).strip().capitalize()
+        raw_month_input = str(params.get('month', '')).strip()
+        year_str = str(params.get('year', '')).strip()
+
+        if not all([market_str, raw_month_input, year_str]):
+            say(f"❌ I'm missing some information. For a monthly review, I need a valid Market, Month, and Year.", thread_ts=thread_ts)
+            return
+
+        market = market_str
+        year = int(year_str)
 
         month_abbr = USER_INPUT_TO_ABBR_MAP.get(raw_month_input.lower())
         if not month_abbr:
@@ -215,7 +177,7 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
             return
         month_full = ABBR_TO_FULL_MONTH_MAP.get(month_abbr)
     except (ValueError, IndexError, AttributeError) as e:
-        say(f"❌ I'm missing some information. For a monthly review, I need a valid Market, Month, and Year. Error: {e}", thread_ts=thread_ts)
+        say(f"❌ I encountered an issue with the parameters. Please ensure you provide a valid Market, Month, and Year. Error: {e}", thread_ts=thread_ts)
         return
 
     say("Step 1/3: Fetching target data...", thread_ts=thread_ts)
@@ -269,7 +231,6 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
 def handle_thread_messages(event, say, context):
     """
     Handles follow-up questions in a monthly review thread.
-    It receives the specific context for this thread from main.py.
     """
     user_message = event.get("text", "").strip()
     thread_ts = event["thread_ts"]
