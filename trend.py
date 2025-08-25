@@ -1,4 +1,3 @@
-
 # ================================================
 # FILE: trend.py (Refactored for Unified Context)
 # ================================================
@@ -61,17 +60,11 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
     """
     Executes the influencer trend analysis. It receives pre-validated, clean parameters from main.py.
     """
-    # Parameters are received clean from main.py, no need for validation or mapping here.
-    # We only need to build the filters dictionary from the provided params.
     filters = {}
-    if 'market' in params:
-        filters['market'] = params['market']
-    if 'year' in params:
-        filters['year'] = params['year']
-    if 'month_full' in params: # The influencer_analytics API view expects the full month name for filtering
-        filters['month'] = params['month_full']
-    if 'tier' in params:
-        filters['tier'] = params['tier']
+    if 'market' in params: filters['market'] = params['market']
+    if 'year' in params: filters['year'] = params['year']
+    if 'month_full' in params: filters['month'] = params['month_full']
+    if 'tier' in params: filters['tier'] = params['tier']
 
     say(f"🔎 Fetching influencer trend data with filters: `{filters}`...", thread_ts=thread_ts)
     
@@ -84,10 +77,9 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         data = response.json()
         
         all_influencers = []
-        # The API can return one specific tier or all tiers in a dictionary
         if data.get("source") == "discovery_tier_specific":
             all_influencers = data.get("items", [])
-        else: # If it returns the dictionary of gold/silver/bronze
+        else:
             for tier_name in ["gold", "silver", "bronze"]:
                 if isinstance(data.get(tier_name), list):
                     all_influencers.extend(data[tier_name])
@@ -102,9 +94,10 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         currency = get_currency_symbol(filters.get('market', 'FRANCE'))
         
+        # --- 1. Best by Conversions (Top 25) ---
         by_conversions = sorted(all_influencers, key=lambda x: x.get('total_conversions', 0), reverse=True)[:25]
         conv_table = "```\nTOP 25 INFLUENCERS BY CONVERSIONS\n"
-        conv_table += f"Rank | Name                    | Conversions | CAC (€)      | Spend (€)\n" # Spend is always EUR in summary
+        conv_table += f"Rank | Name                    | Conversions | CAC (€)      | Spend (€)\n"
         conv_table += "-" * 75 + "\n"
         for i, inf in enumerate(by_conversions, 1):
             name = inf.get('influencer_name', 'N/A')[:20]
@@ -113,27 +106,98 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             spend = inf.get('total_spend_eur', 0)
             conv_table += f"{i:2d}   | {name:<20} | {conv:8.0f}    | {cac:8.2f}   | {spend:10.2f}\n"
         conv_table += "```"
-
         for chunk in split_message_for_slack(conv_table):
             say(text=chunk, thread_ts=thread_ts)
         
-        # Additional tables (like by_cac) can be generated here if needed
+        # --- 2. Best by CAC (Top 15) ---
+        with_conversions = [x for x in all_influencers if x.get('total_conversions', 0) > 0 and x.get('effective_cac_eur', 0) > 0]
+        by_cac = sorted(with_conversions, key=lambda x: x.get('effective_cac_eur', float('inf')))[:15]
+        cac_table = "```\nBEST 15 INFLUENCERS BY CAC (Lowest Cost, Non-Zero Only)\n"
+        cac_table += f"Rank | Name                    | CAC (€)    | Conversions | CTR      | CVR\n"
+        cac_table += "-" * 75 + "\n"
+        for i, inf in enumerate(by_cac, 1):
+            name = inf.get('influencer_name', 'N/A')[:20]
+            cac = inf.get('effective_cac_eur', 0)
+            conv = inf.get('total_conversions', 0)
+            ctr = inf.get('avg_ctr', 0) * 100
+            cvr = inf.get('avg_cvr', 0) * 100
+            cac_table += f"{i:2d}   | {name:<20} | {cac:8.2f}   | {conv:8.0f}    | {ctr:6.3f}%  | {cvr:6.3f}%\n"
+        cac_table += "```"
+        for chunk in split_message_for_slack(cac_table):
+            say(text=chunk, thread_ts=thread_ts)
+        
+        # --- 3. Best by CTR (Top 15) ---
+        by_ctr = sorted(all_influencers, key=lambda x: x.get('avg_ctr', 0), reverse=True)[:15]
+        ctr_table = "```\nBEST 15 INFLUENCERS BY CTR (Click-Through Rate)\n"
+        ctr_table += "Rank | Name                    | CTR      | Views      | Clicks   | Conversions\n"
+        ctr_table += "-" * 80 + "\n"
+        for i, inf in enumerate(by_ctr, 1):
+            name = inf.get('influencer_name', 'N/A')[:20]
+            ctr = inf.get('avg_ctr', 0) * 100
+            views = inf.get('total_views', 0)
+            clicks = inf.get('total_clicks', 0)
+            conv = inf.get('total_conversions', 0)
+            ctr_table += f"{i:2d}   | {name:<20} | {ctr:6.3f}%  | {views:8.0f}   | {clicks:6.0f}   | {conv:8.0f}\n"
+        ctr_table += "```"
+        for chunk in split_message_for_slack(ctr_table):
+            say(text=chunk, thread_ts=thread_ts)
 
+        # --- 4. Best by Video Views (Top 15) ---
+        by_views = sorted(all_influencers, key=lambda x: x.get('total_views', 0), reverse=True)[:15]
+        views_table = "```\nBEST 15 INFLUENCERS BY VIDEO VIEWS\n"
+        views_table += f"Rank | Name                    | Views      | CTR      | Conversions | Spend (€)\n"
+        views_table += "-" * 85 + "\n"
+        for i, inf in enumerate(by_views, 1):
+            name = inf.get('influencer_name', 'N/A')[:20]
+            views = inf.get('total_views', 0)
+            ctr = inf.get('avg_ctr', 0) * 100
+            conv = inf.get('total_conversions', 0)
+            spend = inf.get('total_spend_eur', 0)
+            views_table += f"{i:2d}   | {name:<20} | {views:8.0f}   | {ctr:6.3f}%  | {conv:8.0f}    | {spend:10.2f}\n"
+        views_table += "```"
+        for chunk in split_message_for_slack(views_table):
+            say(text=chunk, thread_ts=thread_ts)
+        
+        # --- 5. Worst Performers (Top 15 by spend with 0 conversions) ---
+        zero_conv = [x for x in all_influencers if x.get('total_conversions', 0) == 0]
+        worst_by_spend = sorted(zero_conv, key=lambda x: x.get('total_spend_eur', 0), reverse=True)[:15]
+        if worst_by_spend:
+            worst_table = "```\nWORST 15 PERFORMERS (Zero Conversions, Sorted by Spend)\n"
+            worst_table += f"Rank | Name                    | Spend (€)  | Views      | Clicks   | CTR\n"
+            worst_table += "-" * 80 + "\n"
+            for i, inf in enumerate(worst_by_spend, 1):
+                name = inf.get('influencer_name', 'N/A')[:20]
+                spend = inf.get('total_spend_eur', 0)
+                views = inf.get('total_views', 0)
+                clicks = inf.get('total_clicks', 0)
+                ctr = inf.get('avg_ctr', 0) * 100
+                worst_table += f"{i:2d}   | {name:<20} | {spend:9.2f}   | {views:8.0f}   | {clicks:6.0f}   | {ctr:6.3f}%\n"
+            worst_table += "```"
+            for chunk in split_message_for_slack(worst_table):
+                say(text=chunk, thread_ts=thread_ts)
+        
+        # --- 6. AI Executive Summary ---
+        total_wasted_spend = sum(inf.get('total_spend_eur', 0) for inf in zero_conv)
         prompt = f"""
-        Analyze this influencer trend data for {filters.get('market', 'all markets')}.
-        Data includes {len(all_influencers)} total influencers.
-        The top performer by conversions is {by_conversions[0]['influencer_name']} with {int(by_conversions[0]['total_conversions'])} conversions.
-        Provide a 2-3 sentence executive summary and one key strategic recommendation based on this data.
+        You are an expert marketing analyst. Based on this influencer performance data for {filters.get('market', 'all markets')}:
+        
+        - Total Influencers Analyzed: {len(all_influencers)}
+        - Top Performer (Conversions): {by_conversions[0]['influencer_name']} with {by_conversions[0]['total_conversions']} conversions.
+        - Most Cost-Effective (CAC): {by_cac[0]['influencer_name']} with a CAC of €{by_cac[0]['effective_cac_eur']:.2f} if by_cac else 'N/A'.
+        - Budget Waste: {len(zero_conv)} influencers generated 0 conversions, wasting a total of €{total_wasted_spend:,.2f}.
+        
+        Provide a concise, data-driven executive summary with the following structure:
+        1.  **Overall Summary:** A 2-sentence overview of the performance.
+        2.  **Key Insight:** What is the most important finding regarding conversion efficiency or inefficiency?
+        3.  **Red Flag:** What is the biggest warning sign from this data (e.g., budget waste)?
+        4.  **Actionable Recommendation:** What is the single most important action to take based on these findings?
         """
         
         ai_response = model.generate_content(prompt)
-        summary_text = f"🧠 **AI Executive Summary:**\n{ai_response.text}"
+        summary_text = f"🧠 **AI EXECUTIVE SUMMARY:**\n{ai_response.text}"
         for chunk in split_message_for_slack(summary_text):
             say(text=chunk, thread_ts=thread_ts)
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API Error in trend.py: {e}")
-        say(f"❌ API Connection Error: Could not fetch trend data.", thread_ts=thread_ts)
     except Exception as e:
         logger.error(f"An unexpected error occurred in trend.py: {e}", exc_info=True)
         say(f"❌ An unexpected error occurred: {str(e)}", thread_ts=thread_ts)
