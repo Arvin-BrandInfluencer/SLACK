@@ -33,21 +33,19 @@ def get_currency_symbol(market):
 # --- ✅ 2. CORE LOGIC FUNCTION ---
 def run_influencer_trend(say, thread_ts, params, thread_context_store):
     """
-    Executes the influencer trend analysis and posts leaderboards to a specific thread.
+    Executes the influencer trend analysis. It receives pre-validated, clean parameters from main.py.
     """
+    # Parameters are received clean from main.py, no need for validation or mapping here.
+    # We only need to build the filters dictionary from the provided params.
     filters = {}
-    try:
-        if market := str(params.get('market', '')).strip():
-            filters['market'] = market
-        if year := str(params.get('year', '')).strip():
-            filters['year'] = int(year)
-        if month := str(params.get('month', '')).strip():
-            filters['month'] = month.capitalize()
-        if tier := str(params.get('tier', '')).strip():
-            filters['tier'] = tier.lower()
-    except (ValueError, AttributeError) as e:
-        say(f"❌ There was an issue with the trend analysis parameters. Error: {e}", thread_ts=thread_ts)
-        return
+    if 'market' in params:
+        filters['market'] = params['market']
+    if 'year' in params:
+        filters['year'] = params['year']
+    if 'month_abbr' in params: # Use the abbreviation for filtering if available
+        filters['month'] = params['month_abbr']
+    if 'tier' in params:
+        filters['tier'] = params['tier']
 
     say(f"🔎 Fetching influencer trend data with filters: `{filters}`...", thread_ts=thread_ts)
     
@@ -60,12 +58,13 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         data = response.json()
         
         all_influencers = []
+        # The API can return one specific tier or all tiers in a dictionary
         if data.get("source") == "discovery_tier_specific":
             all_influencers = data.get("items", [])
-        else:
-            for tier_name, tier_data in data.items():
-                if isinstance(tier_data, list):
-                    all_influencers.extend(tier_data)
+        else: # If it returns the dictionary of gold/silver/bronze
+            for tier_name in ["gold", "silver", "bronze"]:
+                if isinstance(data.get(tier_name), list):
+                    all_influencers.extend(data[tier_name])
         
         if not all_influencers:
             say("❌ No trend data found for the specified filters.", thread_ts=thread_ts)
@@ -79,24 +78,24 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         by_conversions = sorted(all_influencers, key=lambda x: x.get('total_conversions', 0), reverse=True)[:25]
         conv_table = "```\nTOP 25 INFLUENCERS BY CONVERSIONS\n"
-        conv_table += f"Rank | Name                    | Conversions | CAC ({currency})  | Spend ({currency})\n"
+        conv_table += f"Rank | Name                    | Conversions | CAC ({currency})  | Spend (€)\n" # Spend is always EUR in summary
         conv_table += "-" * 75 + "\n"
         for i, inf in enumerate(by_conversions, 1):
             name = inf.get('influencer_name', 'N/A')[:20]
-            conv, cac, spend = inf.get('total_conversions', 0), inf.get('effective_cac_eur', 0), inf.get('total_spend_eur', 0)
+            conv = inf.get('total_conversions', 0)
+            cac = inf.get('effective_cac_eur', 0)
+            spend = inf.get('total_spend_eur', 0)
             conv_table += f"{i:2d}   | {name:<20} | {conv:8.0f}    | {cac:8.2f}   | {spend:10.2f}\n"
         conv_table += "```"
         say(text=conv_table, thread_ts=thread_ts)
         
-        with_conversions = [x for x in all_influencers if x.get('total_conversions', 0) > 0 and x.get('effective_cac_eur', 0) > 0]
-        if with_conversions:
-            by_cac = sorted(with_conversions, key=lambda x: x.get('effective_cac_eur', float('inf')))[:15]
-            # ... additional table generation logic ...
+        # Additional tables (like by_cac) can be generated here if needed
 
         prompt = f"""
-        Analyze this influencer trend data for {filters.get('market', 'Unknown market')}.
-        Total Influencers: {len(all_influencers)}. Best by Conversions: {by_conversions[0]['influencer_name']}.
-        Provide a 2-3 sentence executive summary and one recommendation.
+        Analyze this influencer trend data for {filters.get('market', 'all markets')}.
+        Data includes {len(all_influencers)} total influencers.
+        The top performer by conversions is {by_conversions[0]['influencer_name']} with {int(by_conversions[0]['total_conversions'])} conversions.
+        Provide a 2-3 sentence executive summary and one key strategic recommendation based on this data.
         """
         
         ai_response = model.generate_content(prompt)
@@ -109,7 +108,40 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         logger.error(f"An unexpected error occurred in trend.py: {e}", exc_info=True)
         say(f"❌ An unexpected error occurred: {str(e)}", thread_ts=thread_ts)
 
-# --- ✅ 3. THREAD FOLLOW-UP HANDLER (Placeholder) ---
+# --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
 def handle_thread_messages(event, say, context):
+    """
+    Handles follow-up questions in a trend analysis thread.
+    """
+    user_message = event.get("text", "").strip()
     thread_ts = event["thread_ts"]
-    say(text="I'm sorry, I don't support follow-up questions for trend reports just yet. Please start a new request.", thread_ts=thread_ts)
+    
+    logger.info(f"Handling follow-up for influencer_trend in thread {thread_ts}")
+    
+    try:
+        context_prompt = f"""
+        You are a helpful marketing analyst assistant. A user is asking a follow-up question about an influencer trend report you already provided. Use the following data to answer them.
+
+        **Original Report Context:**
+        - Filters Used: {json.dumps(context.get('filters', {}))}
+        
+        **Available Data (JSON, showing first 15 records):**
+        {json.dumps(context.get('data', [])[:15], indent=2)}
+
+        **User's Follow-up Question:** "{user_message}"
+
+        **Instructions:**
+        - Answer the user's question directly using only the provided JSON data.
+        - Be concise and to the point.
+        - If the data needed is not present in the sample, state that you can only analyze the top records shown.
+        """
+        
+        response = model.generate_content(context_prompt)
+        ai_response = response.text
+
+        for chunk in split_message_for_slack(ai_response):
+            say(text=chunk, thread_ts=thread_ts)
+            
+    except Exception as e:
+        logger.error(f"Error handling thread message in trend.py: {e}")
+        say(text="❌ Sorry, I had trouble processing your follow-up.", thread_ts=thread_ts)
