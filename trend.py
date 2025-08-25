@@ -42,8 +42,8 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         filters['market'] = params['market']
     if 'year' in params:
         filters['year'] = params['year']
-    if 'month_abbr' in params: # Use the abbreviation for filtering if available
-        filters['month'] = params['month_abbr']
+    if 'month_full' in params: # The influencer_analytics API view expects the full month name for filtering
+        filters['month'] = params['month_full']
     if 'tier' in params:
         filters['tier'] = params['tier']
 
@@ -78,7 +78,7 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         
         by_conversions = sorted(all_influencers, key=lambda x: x.get('total_conversions', 0), reverse=True)[:25]
         conv_table = "```\nTOP 25 INFLUENCERS BY CONVERSIONS\n"
-        conv_table += f"Rank | Name                    | Conversions | CAC ({currency})  | Spend (€)\n" # Spend is always EUR in summary
+        conv_table += f"Rank | Name                    | Conversions | CAC (€)      | Spend (€)\n" # Spend is always EUR in summary
         conv_table += "-" * 75 + "\n"
         for i, inf in enumerate(by_conversions, 1):
             name = inf.get('influencer_name', 'N/A')[:20]
