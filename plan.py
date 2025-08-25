@@ -1,4 +1,3 @@
-
 # ======================================================
 # FILE: plan.py (Refactored for Unified Context)
 # ======================================================
@@ -120,18 +119,100 @@ def create_excel_report(recs, tier_breakdown, market, month, year, target_budget
     buffer.seek(0)
     return buffer
 
-def create_llm_prompt_with_code_blocks(market, month, year, recommendations, total_allocated, tier_breakdown):
-    # This is a simplified version of your very complex prompt for brevity.
-    # You should use your original detailed prompt here.
-    return f"Create a strategic plan for {market} in {month} {year}..."
+def create_llm_prompt_with_code_blocks(market, month, year, target_budget, actual_spend, remaining_budget,
+                                     booked_influencers, recommendations, total_allocated, tier_breakdown):
+    """Generates the enhanced, multi-table AI prompt."""
+
+    # --- Build components for the prompt ---
+    total_recs = len(recommendations)
+    total_conv = sum(rec['predicted_conversions'] for rec in recommendations)
+    avg_cac = total_allocated / total_conv if total_conv > 0 else 0
+
+    # Tier Breakdown summary strings
+    gold_recs = tier_breakdown.get('Gold', [])
+    silver_recs = tier_breakdown.get('Silver', [])
+    bronze_recs = tier_breakdown.get('Bronze', [])
+    
+    gold_budget = sum(r['allocated_budget'] for r in gold_recs)
+    gold_conv = sum(r['predicted_conversions'] for r in gold_recs)
+    
+    silver_budget = sum(r['allocated_budget'] for r in silver_recs)
+    silver_conv = sum(r['predicted_conversions'] for r in silver_recs)
+
+    bronze_budget = sum(r['allocated_budget'] for r in bronze_recs)
+    bronze_conv = sum(r['predicted_conversions'] for r in bronze_recs)
+
+    # Top 15 Recommendations table
+    rec_table_rows = []
+    for rec in recommendations[:15]:
+        row = (f"{rec['influencer_name']:<25} | {rec['tier']:<8} | "
+               f"{format_currency(rec['allocated_budget'], market):>12} | "
+               f"{rec['predicted_conversions']:<5} | "
+               f"{format_currency(rec['effective_cac'], market):>12}")
+        rec_table_rows.append(row)
+    rec_table_str = "\n".join(rec_table_rows)
+
+    # Booked Influencers table
+    booked_table_rows = []
+    if booked_influencers:
+        for inf in booked_influencers:
+            row = (f"{inf.get('name', 'Unknown'):<25} | "
+                   f"{format_currency(inf.get('budget_local', 0), market):>15} | Booked")
+            booked_table_rows.append(row)
+    booked_table_str = "\n".join(booked_table_rows) if booked_table_rows else "No influencers were previously booked for this period."
+
+    prompt = f"""
+You are a strategic marketing analyst bot. Generate a comprehensive multi-tier influencer marketing plan using code block table formatting for Slack.
+
+**ANALYSIS FOR: {market.upper()} - {month.capitalize()} {year}**
+
+First, provide the **Budget Overview** in a code block:
+```
+Budget Summary for {market.upper()} - {month.capitalize()} {year}
+Target Budget: {format_currency(target_budget, market)}
+Actual Spend So Far: {format_currency(actual_spend, market)}
+Remaining Budget: {format_currency(remaining_budget, market)}
+Recommended Allocation: {format_currency(total_allocated, market)} ({(total_allocated/remaining_budget if remaining_budget > 0 else 0)*100:.1f}% of remaining)
+```
+
+Next, provide the **Multi-Tier Strategy Overview** in a code block:
+```
+Multi-Tier Allocation Strategy
+🥇 Gold Tier: {len(gold_recs):>3} influencers | {format_currency(gold_budget, market):>12} | {gold_conv:>5} conversions
+🥈 Silver Tier: {len(silver_recs):>3} influencers | {format_currency(silver_budget, market):>12} | {silver_conv:>5} conversions
+🥉 Bronze Tier: {len(bronze_recs):>3} influencers | {format_currency(bronze_budget, market):>12} | {bronze_conv:>5} conversions
+Total Strategy: {total_recs:>3} influencers | {format_currency(total_allocated, market):>12} | {total_conv:>5} conversions
+Projected Avg CAC: {format_currency(avg_cac, market)}
+```
+
+Then, show the **Detailed Influencer Recommendations (Top 15)** in a code block:
+```
+Recommended Influencer Portfolio (Top 15)
+Influencer Name           | Tier     | Budget       | Conv. | Est. CAC
+{rec_table_str}
+```
+
+If there are any, show the **Already Booked Influencers** in a code block:
+```
+Currently Booked Influencers
+Influencer Name           | Spent Budget    | Status
+{booked_table_str}
+```
+
+Finally, provide **Strategic Insights** as a bulleted list (outside of any code block):
+- *[Insight 1: Explain why this tier mix optimizes ROI for the {market.upper()} market based on the data.]*
+- *[Insight 2: Comment on the budget utilization and its impact on achieving campaign goals.]*
+- *[Insight 3: Discuss risk diversification or concentration by recommending influencers from different tiers.]*
+"""
+    return prompt
+
 
 # --- ✅ 2. CORE LOGIC FUNCTION ---
 def run_strategic_plan(client, say, event, thread_ts, params, thread_context_store):
     """
-    Executes the strategic planning logic. It receives pre-validated, clean parameters from main.py.
+    Executes the strategic planning logic with enhanced, multi-table output.
     """
     try:
-        # Parameters are received clean from main.py, no need for validation or mapping here.
         market = params['market']
         month_abbr = params['month_abbr']
         month_full = params['month_full']
@@ -142,15 +223,13 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
         say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
         return
 
-    say(f"📊 Creating a strategic plan for *{market.upper()}* for *{month_full} {year}*...", thread_ts=thread_ts)
+    say(f"📊 Creating an enhanced strategic plan for *{market.upper()}* for *{month_full} {year}*...", thread_ts=thread_ts)
 
-    # The `market` and `month_abbr` are already in the correct case-sensitive format from the router
     target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
     if "error" in target_data:
         say(f"❌ API Error fetching targets: `{target_data['error']}`", thread_ts=thread_ts)
         return
         
-    # The `market` and `month_full` are also in the correct format
     actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
     if "error" in actual_data:
         say(f"❌ API Error fetching actuals: `{actual_data['error']}`", thread_ts=thread_ts)
@@ -163,7 +242,7 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
     remaining_budget = target_budget - actual_spend
 
     if remaining_budget <= 0:
-        say(f"⚠️ **Budget Utilized:** The budget for this period is already {'overspent' if remaining_budget < 0 else 'fully used'}.", thread_ts=thread_ts)
+        say(f"⚠️ **Budget Utilized:** The budget for this period is already {'overspent' if remaining_budget < 0 else 'fully used'}. No further allocation is possible.", thread_ts=thread_ts)
         return
     
     gold = fetch_tier_influencers(market, year, "gold", booked_names)
@@ -171,20 +250,31 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
     bronze = fetch_tier_influencers(market, year, "bronze", booked_names)
     
     if not any([gold, silver, bronze]):
-        say(f"✅ **All Available Influencers Booked!** No further recommendations for this period.", thread_ts=thread_ts)
+        say(f"✅ **All Available Influencers Booked!** No further recommendations can be made for this period.", thread_ts=thread_ts)
         return
 
     recs, total_allocated, tier_breakdown = allocate_budget_cascading_tiers(gold, silver, bronze, remaining_budget, 50, market)
     if not recs:
-        say(f"ℹ️ No influencers could be booked with the remaining budget of {format_currency(remaining_budget, market)}.", thread_ts=thread_ts)
+        say(f"ℹ️ No available influencers could be booked with the remaining budget of {format_currency(remaining_budget, market)}.", thread_ts=thread_ts)
         return
 
     try:
         excel_buffer = create_excel_report(recs, tier_breakdown, market, month_full, year, target_budget, actual_spend, remaining_budget, total_allocated, booked_influencers)
         filename = f"Strategic_Plan_{market}_{month_full}_{year}.xlsx"
-        client.files_upload_v2(channel=event.get('channel'), file=excel_buffer.getvalue(), filename=filename, title=f"Strategic Plan - {market.upper()}", initial_comment="Excel report:", thread_ts=thread_ts)
+        client.files_upload_v2(
+            channel=event.get('channel'), 
+            file=excel_buffer.getvalue(), 
+            filename=filename, 
+            title=f"Strategic Plan Details - {market.upper()}", 
+            initial_comment="Here is the detailed Excel report for the strategic plan:", 
+            thread_ts=thread_ts
+        )
         
-        prompt = create_llm_prompt_with_code_blocks(market, month_full, year, recs, total_allocated, tier_breakdown)
+        prompt = create_llm_prompt_with_code_blocks(
+            market, month_full, year, target_budget, actual_spend,
+            remaining_budget, booked_influencers, recs,
+            total_allocated, tier_breakdown
+        )
         response = gemini_model.generate_content(prompt)
         ai_summary = response.text
 
@@ -200,6 +290,9 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
 
         for chunk in split_message_for_slack(ai_summary):
             say(text=chunk, thread_ts=thread_ts)
+            
+        say(text="💬 *Have questions about this plan? Reply in this thread to ask!*", thread_ts=thread_ts)
+
     except Exception as e:
         logger.error(f"Error during report generation for plan: {e}", exc_info=True)
         say(f"❌ An error occurred while generating the final report: `{str(e)}`", thread_ts=thread_ts)
@@ -241,9 +334,7 @@ def handle_thread_replies(event, say, context):
         
         chunks = split_message_for_slack(ai_response)
         if chunks:
-            # Prepend the user mention only to the first chunk
             say(text=f"<@{user_id}> {chunks[0]}", thread_ts=thread_ts)
-            # Send subsequent chunks without the mention
             for chunk in chunks[1:]:
                 say(text=chunk, thread_ts=thread_ts)
             
