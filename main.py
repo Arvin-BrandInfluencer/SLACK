@@ -46,47 +46,65 @@ except KeyError as e:
 # --- ⭐️ UNIFIED THREAD CONTEXT STORE ⭐️ ---
 thread_context_store = {}
 
-# --- 🧠 NATURAL LANGUAGE ROUTER (LLM Function) ---
+# --- 🧠 ENHANCED NATURAL LANGUAGE ROUTER (LLM Function) ---
 def route_natural_language_query(query: str):
-    """Uses Gemini to classify user intent and extract entities for routing."""
+    """
+    Uses Gemini to classify user intent, extract entities, AND NORMALIZE them for routing.
+    This is the single point of intelligence for handling messy user input.
+    """
     prompt = f"""
-    You are an intelligent routing assistant for a marketing analytics Slack bot.
-    Your task is to analyze the user's query and map it to one of the available tools.
-    You must extract the required parameters for that tool and respond in a specific JSON format.
+    You are an expert routing and normalization assistant for a marketing analytics Slack bot.
+    Your task is to analyze the user's query, map it to a tool, and extract AND NORMALIZE all parameters into the exact format required.
+
+    **PARAMETER NORMALIZATION RULES (STRICT):**
+
+    1.  **`market`**:
+        - User might type "uk", "United Kingdom", "fr", "France", "FR".
+        - You MUST normalize this to one of the following exact, case-sensitive strings:
+          `"UK"`, `"France"`, `"Sweden"`, `"Norway"`, `"Denmark"`, `"Nordics"`
+
+    2.  **`month`**:
+        - User might type "january", "Jan", "jan.", "janu", or misspell it like "janury".
+        - If a month is present, you MUST generate TWO formats in the output:
+          - `month_abbr`: The 3-letter abbreviation with a capital letter (e.g., "Jan", "Feb").
+          - `month_full`: The full month name with a capital letter (e.g., "January", "February").
+
+    3. **`tier`**:
+        - User might type "Gold tier", "golden", "gld".
+        - You MUST normalize this to one of the following exact, lowercase strings:
+          `"gold"`, `"silver"`, `"bronze"`
 
     **AVAILABLE TOOLS:**
 
     1.  **`monthly-review`**:
         - **Description**: Generates a performance review for a specific market, month, and year.
-        - **Parameters**: `market` (string), `month` (string), `year` (integer).
-        - **Example Queries**: "show me the monthly review for UK in December 2025", "how did France do in january 2025"
+        - **Parameters**: `market`, `month_abbr`, `month_full`, `year`.
+        - **Example**: "show me review for uk in decembr 2025" -> `{{"tool_name": "monthly-review", "parameters": {{"market": "UK", "month_abbr": "Dec", "month_full": "December", "year": 2025}}}}`
 
     2.  **`analyse-influencer`**:
         - **Description**: Provides a detailed analysis of a single influencer. Month and year are optional.
-        - **Parameters**: `influencer_name` (string), `month` (string, optional), `year` (integer, optional).
-        - **Example Queries**: "analyse influencer stylebyanna for jan 2025", "performance of home_on_the_commons"
+        - **Parameters**: `influencer_name`, `month_abbr` (optional), `month_full` (optional), `year` (optional).
+        - **Example**: "analyse influencer stylebyanna for janury 2025" -> `{{"tool_name": "analyse-influencer", "parameters": {{"influencer_name": "stylebyanna", "month_abbr": "Jan", "month_full": "January", "year": 2025}}}}`
 
     3.  **`influencer-trend`**:
         - **Description**: Shows trend reports and leaderboards. All parameters are optional filters.
-        - **Parameters**: `market` (string, optional), `month` (string, optional), `year` (integer, optional), `tier` (string, optional: "gold", "silver", "bronze").
-        - **Example Queries**: "show me influencer trends for the UK", "top trends in france for 2025"
+        - **Parameters**: `market` (optional), `month_abbr` (optional), `month_full` (optional), `year` (optional), `tier` (optional).
+        - **Example**: "top golden influencers in fr for 2025" -> `{{"tool_name": "influencer-trend", "parameters": {{"market": "France", "tier": "gold", "year": 2025}}}}`
 
     4.  **`plan`**:
         - **Description**: Creates a strategic budget allocation plan for a future month.
-        - **Parameters**: `market` (string), `month` (string), `year` (integer).
-        - **Example Queries**: "plan the budget for UK in November 2025", "create a plan for france december 2025"
+        - **Parameters**: `market`, `month_abbr`, `month_full`, `year`.
+        - **Example**: "plan the budget for UK in novemb 2025" -> `{{"tool_name": "plan", "parameters": {{"market": "UK", "month_abbr": "Nov", "month_full": "November", "year": 2025}}}}`
 
     **RESPONSE FORMAT:**
-    - If you can confidently identify the tool and all required parameters, respond with ONLY a valid JSON object.
-    - If the query is ambiguous or missing information, respond with `tool_name: "error"`.
-
-    **JSON Structure:**
-    `{{"tool_name": "...", "parameters": {{...}}}}`
+    - If you can confidently identify the tool and NORMALIZE all required parameters, respond with ONLY a valid JSON object.
+    - If the query is ambiguous or missing information, respond with `{{"tool_name": "error", "parameters": {{"reason": "Ambiguous or missing information"}}}}`.
+    - Do not add any commentary. Only the JSON.
 
     ---
     **USER QUERY:** "{query}"
     ---
-    Analyze the query and provide the JSON output now.
+    Analyze and normalize the query, then provide the JSON output now.
     """
     try:
         response = gemini_model.generate_content(prompt)
@@ -115,11 +133,19 @@ def handle_app_mention(event, say, client):
     tool_name = routing_decision.get("tool_name")
     params = routing_decision.get("parameters", {})
 
-    client.chat_update(
-        channel=channel_id,
-        ts=thinking_message['ts'],
-        text=f"✅ Understood! Routing to `*{tool_name}*` analysis. Fetching data now..."
-    )
+    if tool_name and tool_name != "error":
+        client.chat_update(
+            channel=channel_id,
+            ts=thinking_message['ts'],
+            text=f"✅ Understood! Routing to `*{tool_name}*` analysis. Fetching data now..."
+        )
+    else:
+        client.chat_update(
+            channel=channel_id,
+            ts=thinking_message['ts'],
+            text=f"😕 Sorry, I couldn't quite understand that. Please be specific, for example: `show me the monthly review for UK in December 2025`"
+        )
+        return
 
     if tool_name == "monthly-review":
         run_monthly_review(say, thread_ts, params, thread_context_store)
@@ -129,12 +155,6 @@ def handle_app_mention(event, say, client):
         run_influencer_trend(say, thread_ts, params, thread_context_store)
     elif tool_name == "plan":
         run_strategic_plan(client, say, event, thread_ts, params, thread_context_store)
-    else:
-        client.chat_update(
-            channel=channel_id,
-            ts=thinking_message['ts'],
-            text=f"😕 Sorry, I couldn't quite understand that. Please be specific, for example: `show me the monthly review for UK in December 2025`"
-        )
 
 # --- THREAD MESSAGE ROUTING ---
 @app.event("message")
@@ -163,53 +183,52 @@ def route_thread_messages(event, say):
 def route_monthly_review(ack, say, command):
     ack()
     text = command.get('text', '').strip()
-    parts = text.split('-')
-    if len(parts) != 3:
-        say("Invalid format. Use `/monthly-review Market-Month-Year`")
-        return
-    params = {'market': parts[0].strip(), 'month': parts[1].strip(), 'year': parts[2].strip()}
-    initial_response = say(f"Running command `/monthly-review` for *{params['market']}*...")
-    run_monthly_review(say, initial_response['ts'], params, thread_context_store)
+    # For slash commands, we simulate the LLM's output by manually calling the router
+    initial_response = say(f"Running command `/monthly-review {text}`...")
+    routing_decision = route_natural_language_query(f"monthly review for {text.replace('-', ' ')}")
+    params = routing_decision.get("parameters", {})
+    if routing_decision.get("tool_name") == "monthly-review":
+        run_monthly_review(say, initial_response['ts'], params, thread_context_store)
+    else:
+        say("Invalid format. Use `/monthly-review Market-Month-Year`", thread_ts=initial_response['ts'])
+
 
 @app.command("/analyse-influencer")
 def route_analyse_influencer(ack, say, command):
     ack()
     text = command.get('text', '').strip()
-    parts = [p.strip() for p in text.split('-') if p.strip()]
-    if not parts:
-        say("Invalid format. Use `/analyse-influencer name - [year] - [month]`")
-        return
-    params = {"influencer_name": parts[0]}
-    if len(parts) > 1: params['year'] = parts[1]
-    if len(parts) > 2: params['month'] = parts[2]
-    initial_response = say(f"Running command `/analyse-influencer` for *{params['influencer_name']}*...")
-    run_influencer_analysis(say, initial_response['ts'], params, thread_context_store)
+    initial_response = say(f"Running command `/analyse-influencer {text}`...")
+    routing_decision = route_natural_language_query(f"analyse influencer {text.replace('-', ' ')}")
+    params = routing_decision.get("parameters", {})
+    if routing_decision.get("tool_name") == "analyse-influencer":
+        run_influencer_analysis(say, initial_response['ts'], params, thread_context_store)
+    else:
+        say("Invalid format. Use `/analyse-influencer name - [year] - [month]`", thread_ts=initial_response['ts'])
+
 
 @app.command("/influencer-trend")
 def route_influencer_trend(ack, say, command):
     ack()
     text = command.get('text', '').strip()
-    parts = [p.strip() for p in text.split('-') if p.strip()]
-    params = {}
-    if len(parts) > 0: params['market'] = parts[0]
-    if len(parts) > 1: params['year'] = parts[1]
-    if len(parts) > 2: params['month'] = parts[2]
-    if len(parts) > 3: params['tier'] = parts[3]
-    initial_response = say(f"Running command `/influencer-trend`...")
-    run_influencer_trend(say, initial_response['ts'], params, thread_context_store)
+    initial_response = say(f"Running command `/influencer-trend {text}`...")
+    routing_decision = route_natural_language_query(f"influencer trends for {text.replace('-', ' ')}")
+    params = routing_decision.get("parameters", {})
+    if routing_decision.get("tool_name") == "influencer-trend":
+        run_influencer_trend(say, initial_response['ts'], params, thread_context_store)
+    else:
+        say("Invalid format. Use `/influencer-trend [Market]-[Year]-[Month]-[Tier]`", thread_ts=initial_response['ts'])
 
 @app.command("/plan")
 def route_plan(ack, say, command, client):
     ack()
     text = command.get('text', '').strip()
-    parts = text.split('-')
-    if len(parts) != 3:
-        say("Invalid format. Use `/plan Market-Month-Year`")
-        return
-    params = {'market': parts[0].strip(), 'month': parts[1].strip(), 'year': parts[2].strip()}
-    initial_response = say(f"Running command `/plan` for *{params['market']}*...")
-    run_strategic_plan(client, say, command, initial_response['ts'], params, thread_context_store)
-
+    initial_response = say(f"Running command `/plan {text}`...")
+    routing_decision = route_natural_language_query(f"plan for {text.replace('-', ' ')}")
+    params = routing_decision.get("parameters", {})
+    if routing_decision.get("tool_name") == "plan":
+         run_strategic_plan(client, say, command, initial_response['ts'], params, thread_context_store)
+    else:
+        say("Invalid format. Use `/plan Market-Month-Year`", thread_ts=initial_response['ts'])
 
 @app.command("/bot-status")
 def handle_bot_status(ack, say):
