@@ -122,27 +122,18 @@ def create_excel_report(recs, tier_breakdown, market, month, year, target_budget
 def create_llm_prompt_with_code_blocks(market, month, year, target_budget, actual_spend, remaining_budget,
                                      booked_influencers, recommendations, total_allocated, tier_breakdown):
     """Generates the enhanced, multi-table AI prompt."""
-
-    # --- Build components for the prompt ---
     total_recs = len(recommendations)
     total_conv = sum(rec['predicted_conversions'] for rec in recommendations)
     avg_cac = total_allocated / total_conv if total_conv > 0 else 0
-
-    # Tier Breakdown summary strings
     gold_recs = tier_breakdown.get('Gold', [])
     silver_recs = tier_breakdown.get('Silver', [])
     bronze_recs = tier_breakdown.get('Bronze', [])
-    
     gold_budget = sum(r['allocated_budget'] for r in gold_recs)
     gold_conv = sum(r['predicted_conversions'] for r in gold_recs)
-    
     silver_budget = sum(r['allocated_budget'] for r in silver_recs)
     silver_conv = sum(r['predicted_conversions'] for r in silver_recs)
-
     bronze_budget = sum(r['allocated_budget'] for r in bronze_recs)
     bronze_conv = sum(r['predicted_conversions'] for r in bronze_recs)
-
-    # Top 15 Recommendations table
     rec_table_rows = []
     for rec in recommendations[:15]:
         row = (f"{rec['influencer_name']:<25} | {rec['tier']:<8} | "
@@ -151,8 +142,6 @@ def create_llm_prompt_with_code_blocks(market, month, year, target_budget, actua
                f"{format_currency(rec['effective_cac'], market):>12}")
         rec_table_rows.append(row)
     rec_table_str = "\n".join(rec_table_rows)
-
-    # Booked Influencers table
     booked_table_rows = []
     if booked_influencers:
         for inf in booked_influencers:
@@ -167,177 +156,3 @@ You are a strategic marketing analyst bot. Generate a comprehensive multi-tier i
 **ANALYSIS FOR: {market.upper()} - {month.capitalize()} {year}**
 
 First, provide the **Budget Overview** in a code block:
-```
-Budget Summary for {market.upper()} - {month.capitalize()} {year}
-Target Budget: {format_currency(target_budget, market)}
-Actual Spend So Far: {format_currency(actual_spend, market)}
-Remaining Budget: {format_currency(remaining_budget, market)}
-Recommended Allocation: {format_currency(total_allocated, market)} ({(total_allocated/remaining_budget if remaining_budget > 0 else 0)*100:.1f}% of remaining)
-```
-
-Next, provide the **Multi-Tier Strategy Overview** in a code block:
-```
-Multi-Tier Allocation Strategy
-🥇 Gold Tier: {len(gold_recs):>3} influencers | {format_currency(gold_budget, market):>12} | {gold_conv:>5} conversions
-🥈 Silver Tier: {len(silver_recs):>3} influencers | {format_currency(silver_budget, market):>12} | {silver_conv:>5} conversions
-🥉 Bronze Tier: {len(bronze_recs):>3} influencers | {format_currency(bronze_budget, market):>12} | {bronze_conv:>5} conversions
-Total Strategy: {total_recs:>3} influencers | {format_currency(total_allocated, market):>12} | {total_conv:>5} conversions
-Projected Avg CAC: {format_currency(avg_cac, market)}
-```
-
-Then, show the **Detailed Influencer Recommendations (Top 15)** in a code block:
-```
-Recommended Influencer Portfolio (Top 15)
-Influencer Name           | Tier     | Budget       | Conv. | Est. CAC
-{rec_table_str}
-```
-
-If there are any, show the **Already Booked Influencers** in a code block:
-```
-Currently Booked Influencers
-Influencer Name           | Spent Budget    | Status
-{booked_table_str}
-```
-
-Finally, provide **Strategic Insights** as a bulleted list (outside of any code block):
-- *[Insight 1: Explain why this tier mix optimizes ROI for the {market.upper()} market based on the data.]*
-- *[Insight 2: Comment on the budget utilization and its impact on achieving campaign goals.]*
-- *[Insight 3: Discuss risk diversification or concentration by recommending influencers from different tiers.]*
-"""
-    return prompt
-
-
-# --- ✅ 2. CORE LOGIC FUNCTION ---
-def run_strategic_plan(client, say, event, thread_ts, params, thread_context_store):
-    """
-    Executes the strategic planning logic with enhanced, multi-table output.
-    """
-    try:
-        market = params['market']
-        month_abbr = params['month_abbr']
-        month_full = params['month_full']
-        year = params['year']
-        currency_info = get_currency_info(market)
-        currency = currency_info['name']
-    except KeyError as e:
-        say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
-        return
-
-    say(f"📊 Creating an enhanced strategic plan for *{market.upper()}* for *{month_full} {year}*...", thread_ts=thread_ts)
-
-    target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
-    if "error" in target_data:
-        say(f"❌ API Error fetching targets: `{target_data['error']}`", thread_ts=thread_ts)
-        return
-        
-    actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
-    if "error" in actual_data:
-        say(f"❌ API Error fetching actuals: `{actual_data['error']}`", thread_ts=thread_ts)
-        return
-
-    target_budget = target_data.get("kpis", {}).get("total_target_budget", 0)
-    actual_spend = convert_eur_to_local(actual_data.get("metrics", {}).get("budget_spent_eur", 0), market)
-    booked_influencers = actual_data.get("influencers", [])
-    booked_names = {inf['name'] for inf in booked_influencers}
-    remaining_budget = target_budget - actual_spend
-
-    if remaining_budget <= 0:
-        say(f"⚠️ **Budget Utilized:** The budget for this period is already {'overspent' if remaining_budget < 0 else 'fully used'}. No further allocation is possible.", thread_ts=thread_ts)
-        return
-    
-    gold = fetch_tier_influencers(market, year, "gold", booked_names)
-    silver = fetch_tier_influencers(market, year, "silver", booked_names)
-    bronze = fetch_tier_influencers(market, year, "bronze", booked_names)
-    
-    if not any([gold, silver, bronze]):
-        say(f"✅ **All Available Influencers Booked!** No further recommendations can be made for this period.", thread_ts=thread_ts)
-        return
-
-    recs, total_allocated, tier_breakdown = allocate_budget_cascading_tiers(gold, silver, bronze, remaining_budget, 50, market)
-    if not recs:
-        say(f"ℹ️ No available influencers could be booked with the remaining budget of {format_currency(remaining_budget, market)}.", thread_ts=thread_ts)
-        return
-
-    try:
-        excel_buffer = create_excel_report(recs, tier_breakdown, market, month_full, year, target_budget, actual_spend, remaining_budget, total_allocated, booked_influencers)
-        filename = f"Strategic_Plan_{market}_{month_full}_{year}.xlsx"
-        client.files_upload_v2(
-            channel=event.get('channel'), 
-            file=excel_buffer.getvalue(), 
-            filename=filename, 
-            title=f"Strategic Plan Details - {market.upper()}", 
-            initial_comment="Here is the detailed Excel report for the strategic plan:", 
-            thread_ts=thread_ts
-        )
-        
-        prompt = create_llm_prompt_with_code_blocks(
-            market, month_full, year, target_budget, actual_spend,
-            remaining_budget, booked_influencers, recs,
-            total_allocated, tier_breakdown
-        )
-        response = gemini_model.generate_content(prompt)
-        ai_summary = response.text
-
-        thread_context_store[thread_ts] = {
-            'type': 'strategic_plan',
-            'market': market, 'month': month_full, 'year': year, 'currency': currency,
-            'target_budget': target_budget, 'actual_spend': actual_spend,
-            'remaining_budget': remaining_budget, 'total_allocated': total_allocated,
-            'recommendations': recs, 'tier_breakdown': tier_breakdown,
-            'booked_influencers': booked_influencers
-        }
-        logger.success(f"Context stored for thread {thread_ts}")
-
-        for chunk in split_message_for_slack(ai_summary):
-            say(text=chunk, thread_ts=thread_ts)
-            
-        say(text="💬 *Have questions about this plan? Reply in this thread to ask!*", thread_ts=thread_ts)
-
-    except Exception as e:
-        logger.error(f"Error during report generation for plan: {e}", exc_info=True)
-        say(f"❌ An error occurred while generating the final report: `{str(e)}`", thread_ts=thread_ts)
-
-# --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
-def handle_thread_replies(event, say, context):
-    """
-    Handles follow-up questions in a strategic plan thread.
-    """
-    user_message = event.get("text", "").strip()
-    thread_ts = event["thread_ts"]
-    user_id = event.get('user')
-    
-    logger.info(f"Handling follow-up for strategic_plan in thread {thread_ts}")
-    try:
-        context_prompt = f"""
-        You are a strategic marketing analyst bot answering a follow-up question about a previously generated influencer marketing plan.
-        
-        **PLAN CONTEXT:**
-        - Market: {context['market'].upper()}
-        - Period: {context['month']} {context['year']}
-        - Currency: {context['currency']}
-        - Remaining Budget: {format_currency(context['remaining_budget'], context['market'])}
-        - Recommended Allocation: {format_currency(context['total_allocated'], context['market'])}
-        
-        **DATA:**
-        - Recommendations: {json.dumps(context['recommendations'][:15])}
-        - Booked Influencers: {json.dumps(context['booked_influencers'])}
-        
-        **USER QUESTION:** "{user_message}"
-        
-        **INSTRUCTIONS:**
-        - Answer the user's question based on the plan context and data above.
-        - Be concise, helpful, and use the correct currency ({context['currency']}).
-        """
-        
-        response = gemini_model.generate_content(context_prompt)
-        ai_response = response.text
-        
-        chunks = split_message_for_slack(ai_response)
-        if chunks:
-            say(text=f"<@{user_id}> {chunks[0]}", thread_ts=thread_ts)
-            for chunk in chunks[1:]:
-                say(text=chunk, thread_ts=thread_ts)
-            
-    except Exception as e:
-        logger.error(f"Error handling thread question in plan.py: {e}")
-        say(text=f"<@{user_id}> I encountered an error: `{str(e)}`.", thread_ts=thread_ts)
