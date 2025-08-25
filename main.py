@@ -1,5 +1,5 @@
 # ================================================
-# FILE: main.py (Unified Context Architecture - Corrected)
+# FILE: main.py (Unified Context Architecture)
 # ================================================
 import os
 import sys
@@ -99,7 +99,7 @@ def route_natural_language_query(query: str):
 
 # --- ✅ PRIMARY ENTRY POINT: @mention ---
 @app.event("app_mention")
-def handle_app_mention(event, say, client): ### CORRECTION: Added `client` to access app.client
+def handle_app_mention(event, say, client):
     """Handles direct mentions to the bot, creating a thread for the conversation."""
     user_query = re.sub(r'<@.*?>', '', event['text']).strip()
     channel_id = event['channel']
@@ -128,7 +128,6 @@ def handle_app_mention(event, say, client): ### CORRECTION: Added `client` to ac
     elif tool_name == "influencer-trend":
         run_influencer_trend(say, thread_ts, params, thread_context_store)
     elif tool_name == "plan":
-        ### CORRECTION: Pass the `client` and `event` object to the plan runner ###
         run_strategic_plan(client, say, event, thread_ts, params, thread_context_store)
     else:
         client.chat_update(
@@ -200,7 +199,7 @@ def route_influencer_trend(ack, say, command):
     run_influencer_trend(say, initial_response['ts'], params, thread_context_store)
 
 @app.command("/plan")
-def route_plan(ack, say, command, client): ### CORRECTION: Added `client` to access app.client
+def route_plan(ack, say, command, client):
     ack()
     text = command.get('text', '').strip()
     parts = text.split('-')
@@ -209,8 +208,8 @@ def route_plan(ack, say, command, client): ### CORRECTION: Added `client` to acc
         return
     params = {'market': parts[0].strip(), 'month': parts[1].strip(), 'year': parts[2].strip()}
     initial_response = say(f"Running command `/plan` for *{params['market']}*...")
-    ### CORRECTION: Pass the `client` and `command` object to the plan runner ###
     run_strategic_plan(client, say, command, initial_response['ts'], params, thread_context_store)
+
 
 @app.command("/bot-status")
 def handle_bot_status(ack, say):
