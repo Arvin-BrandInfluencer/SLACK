@@ -158,7 +158,6 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
     Executes the monthly review logic. It receives pre-validated, clean parameters from main.py.
     """
     try:
-        # Parameters are received clean from main.py, no need for validation or mapping here.
         market = params['market']
         month_abbr = params['month_abbr']
         month_full = params['month_full']
@@ -170,14 +169,12 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
     say(f"Generating review for *{market.upper()}* - *{month_full} {year}*...", thread_ts=thread_ts)
 
     say("Step 1/3: Fetching target data...", thread_ts=thread_ts)
-    # The `market` and `month_abbr` are already in the correct case-sensitive format from the router
     target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
     if "error" in target_data:
         say(f"❌ Target API Error: `{target_data['error']}`", thread_ts=thread_ts)
         return
     
     say("Step 2/3: Fetching monthly performance data...", thread_ts=thread_ts)
-    # The `market` and `month_full` are also in the correct format
     actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
     if "error" in actual_data:
         say(f"❌ Actuals API Error: `{actual_data['error']}`", thread_ts=thread_ts)
@@ -193,21 +190,26 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
         response = gemini_model.generate_content(prompt)
         ai_review = response.text
         
+        # Store full context for potential follow-up questions
         thread_context_store[thread_ts] = {
             'type': 'monthly_review',
             'market': market,
             'month': month_full,
             'year': year,
-            'target_data': target_data,
-            'actual_data': actual_data,
-            'metrics': {
+            'raw_target_data': target_data,
+            'raw_actual_data': actual_data,
+            'bot_response': ai_review,
+            'summary_metrics': {
                 'target_budget_local': target_data.get("kpis", {}).get("total_target_budget", 0),
                 'actual_spend_local': convert_eur_to_local(actual_data.get("metrics", {}).get("budget_spent_eur", 0), market),
                 'total_conversions': actual_data.get("metrics", {}).get("conversions", 0),
                 'total_influencers': len(actual_data.get("influencers", []))
             }
         }
-        logger.success(f"Context stored for thread {thread_ts}")
+        # Refresh its position if it already exists to avoid being pruned
+        if thread_ts in thread_context_store:
+            thread_context_store.move_to_end(thread_ts)
+        logger.success(f"Full context stored for thread {thread_ts}")
 
         for chunk in split_message_for_slack(ai_review):
             say(text=chunk, thread_ts=thread_ts)
@@ -236,14 +238,20 @@ def handle_thread_messages(event, say, context):
         - Market: {context['market'].upper()}
         - Period: {context['month']} {context['year']}
         
-        **Available Data (JSON):**
-        - Target Data: {json.dumps(context['target_data'])}
-        - Actual Performance Data: {json.dumps(context['actual_data'])}
+        **Your Previous Analysis (for reference):**
+        ---
+        {context.get('bot_response', 'No previous analysis was stored.')}
+        ---
+        
+        **Full Raw Data Available (JSON):**
+        - Target Data: {json.dumps(context.get('raw_target_data', {}))}
+        - Actual Performance Data: {json.dumps(context.get('raw_actual_data', {}))}
 
         **User's Follow-up Question:** "{user_message}"
 
         **Instructions:**
-        - Answer the user's question directly using only the provided JSON data.
+        - Answer the user's question directly using the **Full Raw Data** provided.
+        - Your previous analysis is for context, but base your new answer on the raw data for maximum accuracy.
         - Be concise and to the point.
         - If the data needed is not present, state that clearly.
         - Use correct currency formatting for the market ({context['market'].upper()}).
