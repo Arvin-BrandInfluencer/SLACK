@@ -1,3 +1,6 @@
+================================================
+FILE: plan.py
+================================================
 # ======================================================
 # FILE: plan.py (Refactored for Unified Context)
 # ======================================================
@@ -238,7 +241,13 @@ def handle_thread_replies(event, say, context):
         response = gemini_model.generate_content(context_prompt)
         ai_response = response.text
         
-        say(text=f"<@{user_id}> {ai_response}", thread_ts=thread_ts)
+        chunks = split_message_for_slack(ai_response)
+        if chunks:
+            # Prepend the user mention only to the first chunk
+            say(text=f"<@{user_id}> {chunks[0]}", thread_ts=thread_ts)
+            # Send subsequent chunks without the mention
+            for chunk in chunks[1:]:
+                say(text=chunk, thread_ts=thread_ts)
             
     except Exception as e:
         logger.error(f"Error handling thread question in plan.py: {e}")
