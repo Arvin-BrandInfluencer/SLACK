@@ -28,11 +28,8 @@ MARKET_CURRENCY_CONFIG = { 'SWEDEN': {'rate': 11.30, 'symbol': 'SEK', 'name': 'S
 BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
 TARGET_API_URL = f"{BASE_API_URL}/api/dashboard/targets"
 ACTUALS_API_URL = f"{BASE_API_URL}/api/monthly_breakdown"
-USER_INPUT_TO_ABBR_MAP = { 'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr', 'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug', 'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec', 'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun', 'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec' }
-ABBR_TO_FULL_MONTH_MAP = { 'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April', 'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August', 'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December' }
 
 def get_currency_info(market):
-    # Handles case sensitivity for market
     return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def convert_eur_to_local(amount_eur, market):
@@ -158,55 +155,48 @@ def create_monthly_review_prompt(market, month, year, target_data, actual_data):
 # --- ✅ 2. CORE LOGIC FUNCTION ---
 def run_monthly_review(say, thread_ts, params, thread_context_store):
     """
-    Executes the monthly review logic and posts the results to a specific thread.
+    Executes the monthly review logic. It receives pre-validated, clean parameters from main.py.
     """
     try:
-        market_str = str(params.get('market', '')).strip()
-        raw_month_input = str(params.get('month', '')).strip()
-        year_str = str(params.get('year', '')).strip()
-
-        if not all([market_str, raw_month_input, year_str]):
-            say(f"❌ I'm missing some information. For a monthly review, I need a valid Market, Month, and Year.", thread_ts=thread_ts)
-            return
-
-        market = market_str.capitalize()
-        year = int(year_str)
-
-        month_abbr = USER_INPUT_TO_ABBR_MAP.get(raw_month_input.lower())
-        if not month_abbr:
-            say(f"❌ Invalid month: '{raw_month_input}'. Please use a full month name or 3-letter abbreviation.", thread_ts=thread_ts)
-            return
-        month_full = ABBR_TO_FULL_MONTH_MAP.get(month_abbr)
-    except (ValueError, IndexError, AttributeError) as e:
-        say(f"❌ I encountered an issue with the parameters. Please ensure you provide a valid Market, Month, and Year. Error: {e}", thread_ts=thread_ts)
+        # Parameters are received clean from main.py, no need for validation or mapping here.
+        market = params['market']
+        month_abbr = params['month_abbr']
+        month_full = params['month_full']
+        year = params['year']
+    except KeyError as e:
+        say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
         return
 
+    say(f"Generating review for *{market.upper()}* - *{month_full} {year}*...", thread_ts=thread_ts)
+
     say("Step 1/3: Fetching target data...", thread_ts=thread_ts)
+    # The `market` and `month_abbr` are already in the correct case-sensitive format from the router
     target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
     if "error" in target_data:
         say(f"❌ Target API Error: `{target_data['error']}`", thread_ts=thread_ts)
         return
     
     say("Step 2/3: Fetching monthly performance data...", thread_ts=thread_ts)
+    # The `market` and `month_full` are also in the correct format
     actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
     if "error" in actual_data:
         say(f"❌ Actuals API Error: `{actual_data['error']}`", thread_ts=thread_ts)
         return
 
     if not actual_data.get("influencers"):
-        say(f"✅ **No performance data found** for {market.upper()} {raw_month_input.capitalize()} {year}. No influencers were active in this period.", thread_ts=thread_ts)
+        say(f"✅ **No performance data found** for {market.upper()} {month_full} {year}. No influencers were active in this period.", thread_ts=thread_ts)
         return
 
     say("Step 3/3: Analyzing data and generating review...", thread_ts=thread_ts)
     try:
-        prompt = create_monthly_review_prompt(market, raw_month_input, year, target_data, actual_data)
+        prompt = create_monthly_review_prompt(market, month_full, year, target_data, actual_data)
         response = gemini_model.generate_content(prompt)
         ai_review = response.text
         
         thread_context_store[thread_ts] = {
             'type': 'monthly_review',
             'market': market,
-            'month': raw_month_input,
+            'month': month_full,
             'year': year,
             'target_data': target_data,
             'actual_data': actual_data,
@@ -226,7 +216,7 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
         logger.error(f"Error during AI review generation: {e}")
         say(f"❌ An error occurred while generating the AI summary: `{str(e)}`", thread_ts=thread_ts)
     
-    logger.success(f"Review completed for {market}-{raw_month_input}-{year}")
+    logger.success(f"Review completed for {market}-{month_full}-{year}")
 
 # --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
 def handle_thread_messages(event, say, context):
@@ -244,7 +234,7 @@ def handle_thread_messages(event, say, context):
 
         **Original Review Context:**
         - Market: {context['market'].upper()}
-        - Period: {context['month'].capitalize()} {context['year']}
+        - Period: {context['month']} {context['year']}
         
         **Available Data (JSON):**
         - Target Data: {json.dumps(context['target_data'])}
