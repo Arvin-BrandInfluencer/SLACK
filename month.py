@@ -32,6 +32,7 @@ USER_INPUT_TO_ABBR_MAP = { 'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 
 ABBR_TO_FULL_MONTH_MAP = { 'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April', 'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August', 'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December' }
 
 def get_currency_info(market):
+    # Handles case sensitivity for market
     return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def convert_eur_to_local(amount_eur, market):
@@ -160,7 +161,7 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
     Executes the monthly review logic and posts the results to a specific thread.
     """
     try:
-        market_str = str(params.get('market', '')).strip().capitalize()
+        market_str = str(params.get('market', '')).strip()
         raw_month_input = str(params.get('month', '')).strip()
         year_str = str(params.get('year', '')).strip()
 
@@ -168,7 +169,7 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
             say(f"❌ I'm missing some information. For a monthly review, I need a valid Market, Month, and Year.", thread_ts=thread_ts)
             return
 
-        market = market_str
+        market = market_str.capitalize()
         year = int(year_str)
 
         month_abbr = USER_INPUT_TO_ABBR_MAP.get(raw_month_input.lower())
