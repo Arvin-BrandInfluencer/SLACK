@@ -1,3 +1,6 @@
+================================================
+FILE: trend.py
+================================================
 # ================================================
 # FILE: trend.py (Refactored for Unified Context)
 # ================================================
@@ -29,6 +32,31 @@ CURRENCY_MAP = { 'SWEDEN': 'SEK', 'NORWAY': 'NOK', 'DENMARK': 'DKK', 'UK': 'GBP'
 
 def get_currency_symbol(market):
     return CURRENCY_MAP.get(str(market).upper(), 'EUR')
+
+def split_message_for_slack(message: str, max_length: int = 2800) -> list:
+    """Splits a long message into chunks for Slack, respecting code blocks."""
+    if len(message) <= max_length:
+        return [message]
+    
+    chunks, current_chunk, in_code_block = [], "", False
+    for line in message.split('\n'):
+        if line.strip().startswith('```'):
+            in_code_block = not in_code_block
+        
+        if len(current_chunk) + len(line) + 1 > max_length:
+            if in_code_block and current_chunk:
+                current_chunk += "\n```"
+                in_code_block = False
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = "```\n" + line + "\n" if in_code_block else line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    if current_chunk:
+        chunks.append(current_chunk)
+        
+    return chunks
 
 # --- ✅ 2. CORE LOGIC FUNCTION ---
 def run_influencer_trend(say, thread_ts, params, thread_context_store):
@@ -87,7 +115,9 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
             spend = inf.get('total_spend_eur', 0)
             conv_table += f"{i:2d}   | {name:<20} | {conv:8.0f}    | {cac:8.2f}   | {spend:10.2f}\n"
         conv_table += "```"
-        say(text=conv_table, thread_ts=thread_ts)
+
+        for chunk in split_message_for_slack(conv_table):
+            say(text=chunk, thread_ts=thread_ts)
         
         # Additional tables (like by_cac) can be generated here if needed
 
@@ -99,7 +129,9 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store):
         """
         
         ai_response = model.generate_content(prompt)
-        say(text=f"🧠 **AI Executive Summary:**\n{ai_response.text}", thread_ts=thread_ts)
+        summary_text = f"🧠 **AI Executive Summary:**\n{ai_response.text}"
+        for chunk in split_message_for_slack(summary_text):
+            say(text=chunk, thread_ts=thread_ts)
         
     except requests.exceptions.RequestException as e:
         logger.error(f"API Error in trend.py: {e}")
