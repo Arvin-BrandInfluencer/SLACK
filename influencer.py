@@ -131,8 +131,8 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         # Optional parameters, already cleaned by main.py
         if 'year' in params:
             filters['year'] = params['year']
-        if 'month_abbr' in params: # API expects abbreviation for month filter
-            filters['month'] = params['month_abbr']
+        if 'month_full' in params: # The influencer analytics API expects the full month name
+            filters['month'] = params['month_full']
 
     except KeyError as e:
         say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
