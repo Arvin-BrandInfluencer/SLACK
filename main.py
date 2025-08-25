@@ -1,5 +1,5 @@
 # ================================================
-# FILE: main.py (Unified Context Architecture)
+# FILE: main.py (Unified Context Architecture - Corrected)
 # ================================================
 import os
 import sys
@@ -14,7 +14,7 @@ import google.generativeai as genai
 # Import the refactored CORE LOGIC functions from the modules
 from month import run_monthly_review, handle_thread_messages as month_thread_handler
 from influencer import run_influencer_analysis, handle_thread_messages as influencer_thread_handler
-from trend import run_influencer_trend # Note: trend.py may not have a thread handler
+from trend import run_influencer_trend, handle_thread_messages as trend_thread_handler
 from plan import run_strategic_plan, handle_thread_replies as plan_thread_handler
 
 # --- Loguru Configuration ---
@@ -44,7 +44,6 @@ except KeyError as e:
     sys.exit(1)
 
 # --- ⭐️ UNIFIED THREAD CONTEXT STORE ⭐️ ---
-# This single dictionary manages the context for ALL threaded conversations.
 thread_context_store = {}
 
 # --- 🧠 NATURAL LANGUAGE ROUTER (LLM Function) ---
@@ -100,11 +99,11 @@ def route_natural_language_query(query: str):
 
 # --- ✅ PRIMARY ENTRY POINT: @mention ---
 @app.event("app_mention")
-def handle_app_mention(event, say):
+def handle_app_mention(event, say, client): ### CORRECTION: Added `client` to access app.client
     """Handles direct mentions to the bot, creating a thread for the conversation."""
     user_query = re.sub(r'<@.*?>', '', event['text']).strip()
     channel_id = event['channel']
-    thread_ts = event.get('ts') # Use the timestamp of the mention to start the thread
+    thread_ts = event.get('ts')
 
     if not user_query:
         say(text="Hello! How can I help? Mention me with a question.", thread_ts=thread_ts)
@@ -116,13 +115,12 @@ def handle_app_mention(event, say):
     tool_name = routing_decision.get("tool_name")
     params = routing_decision.get("parameters", {})
 
-    app.client.chat_update(
+    client.chat_update(
         channel=channel_id,
         ts=thinking_message['ts'],
         text=f"✅ Understood! Routing to `*{tool_name}*` analysis. Fetching data now..."
     )
 
-    # Route to the appropriate handler function
     if tool_name == "monthly-review":
         run_monthly_review(say, thread_ts, params, thread_context_store)
     elif tool_name == "analyse-influencer":
@@ -130,9 +128,10 @@ def handle_app_mention(event, say):
     elif tool_name == "influencer-trend":
         run_influencer_trend(say, thread_ts, params, thread_context_store)
     elif tool_name == "plan":
-        run_strategic_plan(say, thread_ts, params, thread_context_store)
+        ### CORRECTION: Pass the `client` and `event` object to the plan runner ###
+        run_strategic_plan(client, say, event, thread_ts, params, thread_context_store)
     else:
-        app.client.chat_update(
+        client.chat_update(
             channel=channel_id,
             ts=thinking_message['ts'],
             text=f"😕 Sorry, I couldn't quite understand that. Please be specific, for example: `show me the monthly review for UK in December 2025`"
@@ -141,10 +140,6 @@ def handle_app_mention(event, say):
 # --- THREAD MESSAGE ROUTING ---
 @app.event("message")
 def route_thread_messages(event, say):
-    """
-    Routes thread messages to the correct handler based on the context
-    stored in our unified `thread_context_store`.
-    """
     thread_ts = event.get("thread_ts")
     if not thread_ts or event.get("bot_id"):
         return
@@ -160,7 +155,8 @@ def route_thread_messages(event, say):
             influencer_thread_handler(event, say, context)
         elif context_type == "strategic_plan":
             plan_thread_handler(event, say, context)
-        # Add other handlers here if they support threading
+        elif context_type == "influencer_trend":
+            trend_thread_handler(event, say, context)
 
 # --- 🛠️ LEGACY SLASH COMMANDS (Refactored to call core logic) ---
 
@@ -204,7 +200,7 @@ def route_influencer_trend(ack, say, command):
     run_influencer_trend(say, initial_response['ts'], params, thread_context_store)
 
 @app.command("/plan")
-def route_plan(ack, say, command):
+def route_plan(ack, say, command, client): ### CORRECTION: Added `client` to access app.client
     ack()
     text = command.get('text', '').strip()
     parts = text.split('-')
@@ -213,8 +209,8 @@ def route_plan(ack, say, command):
         return
     params = {'market': parts[0].strip(), 'month': parts[1].strip(), 'year': parts[2].strip()}
     initial_response = say(f"Running command `/plan` for *{params['market']}*...")
-    run_strategic_plan(say, initial_response['ts'], params, thread_context_store)
-
+    ### CORRECTION: Pass the `client` and `command` object to the plan runner ###
+    run_strategic_plan(client, say, command, initial_response['ts'], params, thread_context_store)
 
 @app.command("/bot-status")
 def handle_bot_status(ack, say):
