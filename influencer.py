@@ -31,7 +31,7 @@ except KeyError as e:
     logger.critical(f"FATAL: Missing GOOGLE_API_KEY. Please check .env file.")
     sys.exit(1)
 
-# --- CONSTANTS AND HELPERS (Unchanged) ---
+# --- CONSTANTS AND HELPERS ---
 MARKET_CURRENCY_SYMBOLS = {
     'SWEDEN': 'SEK', 'NORWAY': 'NOK', 'DENMARK': 'DKK',
     'UK': '£', 'FRANCE': '€', 'NORDICS': '€'
@@ -49,8 +49,8 @@ USER_INPUT_TO_ABBR_MAP = {
     'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec'
 }
 
-# --- All helper functions (format_currency, split_message_for_slack, etc.) remain the same ---
 def format_currency(amount, market):
+    """Formats a number with the correct currency symbol based on the market."""
     market_upper = str(market).upper()
     symbol = MARKET_CURRENCY_SYMBOLS.get(market_upper, '€')
     if market_upper in ['SWEDEN', 'NORWAY', 'DENMARK']:
@@ -59,6 +59,7 @@ def format_currency(amount, market):
         return f"{symbol}{amount:,.2f}"
 
 def split_message_for_slack(message: str, max_length: int = 2800) -> list:
+    """Splits long messages for Slack, preserving code blocks."""
     if len(message) <= max_length: return [message]
     chunks, current_chunk, in_code_block = [], "", False
     for line in message.split('\n'):
@@ -73,6 +74,7 @@ def split_message_for_slack(message: str, max_length: int = 2800) -> list:
     return chunks
 
 def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
+    """Generic function to query an API endpoint."""
     logger.info(f"Querying {endpoint_name} API at {url} with payload: {payload}")
     try:
         response = requests.post(url, json=payload, timeout=30)
@@ -83,16 +85,64 @@ def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
 def create_influencer_analysis_prompt(influencer_name, campaigns, summary_stats):
-    # This entire complex prompt function remains exactly the same.
-    # ... (code for the prompt function is identical to your original file)
-    return "..." # Placeholder for your very detailed prompt string
+    """Creates a Gemini prompt for detailed influencer analysis, respecting local currencies."""
+    campaign_table_rows = []
+    for c in campaigns:
+        market = c.get('market', 'N/A')
+        row = (
+            f"{c.get('year')}-{c.get('month', 'N/A'):<3} | "
+            f"{market:<7} | "
+            f"{format_currency(c.get('total_budget_clean', 0), market):>11} | "
+            f"{c.get('actual_conversions_clean', 0):<5.0f} | "
+            f"{format_currency(c.get('cac_local', 0), market):>9} | "
+            f"{c.get('ctr', 0):>5.2%}"
+        )
+        campaign_table_rows.append(row)
+    campaign_table_str = "\n".join(campaign_table_rows)
+
+    prompt = f"""
+    You are an expert influencer marketing analyst. A user has requested an analysis of an influencer's performance.
+
+    **INSTRUCTIONS ON CURRENCY:**
+    - The "Profile Summary" provides totals in EUR for comparison.
+    - The "Campaign Breakdown" table shows each campaign in its LOCAL CURRENCY (e.g., SEK, GBP).
+    - Your analysis must reflect this.
+
+    **GENERATE A REPORT WITH THIS EXACT FORMAT:**
+
+    1.  **Profile Summary (Code Block):**
+        ```
+        Influencer Profile: {influencer_name}
+        =========================================================
+        Total Campaigns:      {summary_stats['total_campaigns']}
+        Markets:              {', '.join(summary_stats['markets'])}
+        Total Spend (EUR):    €{summary_stats['total_spend_eur']:,.2f}
+        Total Conversions:    {summary_stats['total_conversions']}
+        Effective CAC (EUR):  €{summary_stats['effective_cac_eur']:,.2f}
+        Average CTR:          {summary_stats['average_ctr']:.2%}
+        ```
+
+    2.  **Performance Analysis (Bulleted List):**
+        - Provide a concise, top-level analysis. Is this a strong performer?
+
+    3.  **Strengths & Weaknesses (Bulleted List):**
+        - List 2-3 key points, referencing specific campaigns and their local currency performance (e.g., "Excellent efficiency in Sweden with a CAC of just 150 SEK.").
+
+    4.  **Campaign Breakdown (Code Block):**
+        ```
+        Campaign Details (in Local Currency)
+        ========================================================================
+        Date       | Market  | Budget      | Conv. | CAC       | CTR
+        -----------|---------|-------------|-------|-----------|-------
+        {campaign_table_str}
+        ```
+    """
+    return prompt
 
 # --- ✅ 2. CORE LOGIC FUNCTION ---
-# This is called by main.py for both @mentions and slash commands.
 def run_influencer_analysis(say, thread_ts, params, thread_context_store):
     """
     Executes the influencer analysis logic and posts the results to a specific thread.
-    This function is now stateless and relies on inputs from main.py.
     """
     try:
         influencer_name = params.get('influencer_name', '').strip()
@@ -102,7 +152,6 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
             
         filters = {"influencer_name": influencer_name}
         
-        # Optional parameters
         if 'year' in params and params['year']:
             filters['year'] = int(params['year'])
         if 'month' in params and params['month']:
@@ -113,10 +162,9 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
             filters['month'] = month_abbr
 
     except (ValueError, AttributeError) as e:
-        say(f"❌ There was an issue with the parameters provided for the analysis. Please check them. Error: {e}", thread_ts=thread_ts)
+        say(f"❌ There was an issue with the parameters for the analysis. Error: {e}", thread_ts=thread_ts)
         return
 
-    # --- API Calls and Analysis ---
     say(f"🔎 Analyzing performance for *{influencer_name}*...", thread_ts=thread_ts)
 
     payload = {"source": "influencer_analytics", "filters": filters}
@@ -146,12 +194,10 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
     }
 
     try:
-        # Assuming create_influencer_analysis_prompt is defined above
         prompt = create_influencer_analysis_prompt(influencer_name, campaigns, summary_stats)
         response = gemini_model.generate_content(prompt)
         ai_analysis = response.text
 
-        # --- Store context in the UNIFIED store from main.py ---
         thread_context_store[thread_ts] = {
             'type': 'influencer_analysis',
             'influencer_name': influencer_name,
@@ -161,7 +207,6 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         }
         logger.success(f"Context stored for thread {thread_ts}")
 
-        # Post the final report in chunks to the thread
         for chunk in split_message_for_slack(ai_analysis):
             say(text=chunk, thread_ts=thread_ts)
 
@@ -171,11 +216,9 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
 
 
 # --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
-# This is called by main.py when a user replies in a thread managed by this module.
 def handle_thread_messages(event, say, context):
     """
     Handles follow-up questions in an influencer analysis thread.
-    It receives the specific context for this thread from main.py.
     """
     user_message = event.get("text", "").strip()
     thread_ts = event["thread_ts"]
@@ -183,7 +226,6 @@ def handle_thread_messages(event, say, context):
     logger.info(f"Handling follow-up for influencer_analysis in thread {thread_ts}")
     
     try:
-        # Create context-aware prompt using the `context` dictionary
         context_prompt = f"""
         You are a helpful marketing analyst assistant. A user is asking a follow-up question about an influencer analysis you already provided. Use the following data to answer them.
 
@@ -199,7 +241,6 @@ def handle_thread_messages(event, say, context):
         **Instructions:**
         - Answer the user's question directly using only the provided JSON data.
         - Be concise and to the point.
-        - If you perform a calculation, briefly explain it.
         - If the data needed to answer is not present, state that clearly.
         - Use correct currency formatting when referencing financial data from the 'campaigns' list.
         """
