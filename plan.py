@@ -33,11 +33,8 @@ ACTUALS_API_URL = f"{BASE_API_URL}/api/monthly_breakdown"
 DISCOVERY_API_URL = f"{BASE_API_URL}/api/discovery"
 
 MARKET_CURRENCY_CONFIG = { 'SWEDEN': {'rate': 11.30, 'symbol': 'SEK', 'name': 'SEK'}, 'NORWAY': {'rate': 11.50, 'symbol': 'NOK', 'name': 'NOK'}, 'DENMARK': {'rate': 7.46, 'symbol': 'DKK', 'name': 'DKK'}, 'UK': {'rate': 0.85, 'symbol': '£', 'name': 'GBP'}, 'FRANCE': {'rate': 1.0, 'symbol': '€', 'name': 'EUR'}, }
-USER_INPUT_TO_ABBR_MAP = { 'january': 'Jan', 'february': 'Feb', 'march': 'Mar', 'april': 'Apr', 'may': 'May', 'june': 'Jun', 'july': 'Jul', 'august': 'Aug', 'september': 'Sep', 'october': 'Oct', 'november': 'Nov', 'december': 'Dec', 'jan': 'Jan', 'feb': 'Feb', 'mar': 'Mar', 'apr': 'Apr', 'jun': 'Jun', 'jul': 'Jul', 'aug': 'Aug', 'sep': 'Sep', 'oct': 'Oct', 'nov': 'Nov', 'dec': 'Dec' }
-ABBR_TO_FULL_MONTH_MAP = { 'Jan': 'January', 'Feb': 'February', 'Mar': 'March', 'Apr': 'April', 'May': 'May', 'Jun': 'June', 'Jul': 'July', 'Aug': 'August', 'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December' }
 
 def get_currency_info(market):
-    # Handles case sensitivity for market
     return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def convert_eur_to_local(amount_eur, market):
@@ -84,7 +81,7 @@ def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
         logger.error(f"{endpoint_name} API Connection Error: {e}")
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
-def fetch_tier_influencers(market, year, month_full, tier, booked_influencer_names):
+def fetch_tier_influencers(market, year, tier, booked_influencer_names):
     discovery_payload = { "filters": {"market": market, "year": year, "tier": tier} }
     discovery_data = query_api(DISCOVERY_API_URL, discovery_payload, f"Discovery-{tier.capitalize()}")
     if "error" in discovery_data:
@@ -95,7 +92,7 @@ def fetch_tier_influencers(market, year, month_full, tier, booked_influencer_nam
     logger.info(f"Found {len(unbooked)} unbooked {tier.capitalize()}-tier influencers")
     return unbooked
 
-def allocate_budget_cascading_tiers(gold, silver, bronze, budget, cac=50, market='FRANCE'):
+def allocate_budget_cascading_tiers(gold, silver, bronze, budget, cac=50, market='France'):
     recs, allocated = [], 0
     tier_breakdown = {'Gold': [], 'Silver': [], 'Bronze': []}
     tiers_data = [('Gold', gold), ('Silver', silver), ('Bronze', bronze)]
@@ -130,33 +127,29 @@ def create_llm_prompt_with_code_blocks(market, month, year, recommendations, tot
 # --- ✅ 2. CORE LOGIC FUNCTION ---
 def run_strategic_plan(client, say, event, thread_ts, params, thread_context_store):
     """
-    Executes the strategic planning logic and posts the results to a specific thread.
+    Executes the strategic planning logic. It receives pre-validated, clean parameters from main.py.
     """
     try:
-        market_str = str(params.get('market', '')).strip()
-        raw_month_input = str(params.get('month', '')).strip()
-        year = int(str(params.get('year', '')))
-        
-        market = market_str.capitalize()
-
-        month_abbr = USER_INPUT_TO_ABBR_MAP.get(raw_month_input.lower())
-        if not month_abbr:
-            say(f"❌ Invalid month: '{raw_month_input}'.", thread_ts=thread_ts)
-            return
-        month_full = ABBR_TO_FULL_MONTH_MAP.get(month_abbr)
+        # Parameters are received clean from main.py, no need for validation or mapping here.
+        market = params['market']
+        month_abbr = params['month_abbr']
+        month_full = params['month_full']
+        year = params['year']
         currency_info = get_currency_info(market)
         currency = currency_info['name']
-    except (ValueError, IndexError, AttributeError) as e:
-        say(f"❌ I'm missing some information. For a plan, I need a valid Market, Month, and Year. Error: {e}", thread_ts=thread_ts)
+    except KeyError as e:
+        say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
         return
 
-    say(f"📊 Creating a strategic plan for *{market.upper()}* for *{raw_month_input.capitalize()} {year}*...", thread_ts=thread_ts)
+    say(f"📊 Creating a strategic plan for *{market.upper()}* for *{month_full} {year}*...", thread_ts=thread_ts)
 
+    # The `market` and `month_abbr` are already in the correct case-sensitive format from the router
     target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
     if "error" in target_data:
         say(f"❌ API Error fetching targets: `{target_data['error']}`", thread_ts=thread_ts)
         return
         
+    # The `market` and `month_full` are also in the correct format
     actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
     if "error" in actual_data:
         say(f"❌ API Error fetching actuals: `{actual_data['error']}`", thread_ts=thread_ts)
@@ -172,9 +165,9 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
         say(f"⚠️ **Budget Utilized:** The budget for this period is already {'overspent' if remaining_budget < 0 else 'fully used'}.", thread_ts=thread_ts)
         return
     
-    gold = fetch_tier_influencers(market, year, month_full, "gold", booked_names)
-    silver = fetch_tier_influencers(market, year, month_full, "silver", booked_names)
-    bronze = fetch_tier_influencers(market, year, month_full, "bronze", booked_names)
+    gold = fetch_tier_influencers(market, year, "gold", booked_names)
+    silver = fetch_tier_influencers(market, year, "silver", booked_names)
+    bronze = fetch_tier_influencers(market, year, "bronze", booked_names)
     
     if not any([gold, silver, bronze]):
         say(f"✅ **All Available Influencers Booked!** No further recommendations for this period.", thread_ts=thread_ts)
@@ -186,17 +179,17 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
         return
 
     try:
-        excel_buffer = create_excel_report(recs, tier_breakdown, market, raw_month_input, year, target_budget, actual_spend, remaining_budget, total_allocated, booked_influencers)
-        filename = f"Strategic_Plan_{market}_{raw_month_input}_{year}.xlsx"
+        excel_buffer = create_excel_report(recs, tier_breakdown, market, month_full, year, target_budget, actual_spend, remaining_budget, total_allocated, booked_influencers)
+        filename = f"Strategic_Plan_{market}_{month_full}_{year}.xlsx"
         client.files_upload_v2(channel=event.get('channel'), file=excel_buffer.getvalue(), filename=filename, title=f"Strategic Plan - {market.upper()}", initial_comment="Excel report:", thread_ts=thread_ts)
         
-        prompt = create_llm_prompt_with_code_blocks(market, raw_month_input, year, recs, total_allocated, tier_breakdown)
+        prompt = create_llm_prompt_with_code_blocks(market, month_full, year, recs, total_allocated, tier_breakdown)
         response = gemini_model.generate_content(prompt)
         ai_summary = response.text
 
         thread_context_store[thread_ts] = {
             'type': 'strategic_plan',
-            'market': market, 'month': raw_month_input, 'year': year, 'currency': currency,
+            'market': market, 'month': month_full, 'year': year, 'currency': currency,
             'target_budget': target_budget, 'actual_spend': actual_spend,
             'remaining_budget': remaining_budget, 'total_allocated': total_allocated,
             'recommendations': recs, 'tier_breakdown': tier_breakdown,
