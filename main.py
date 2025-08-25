@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import re
+import collections
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -43,8 +44,9 @@ except KeyError as e:
     logger.critical(f"FATAL: Missing environment variable: {e}. Please check your .env file.")
     sys.exit(1)
 
-# --- ⭐️ UNIFIED THREAD CONTEXT STORE ⭐️ ---
-thread_context_store = {}
+# --- ⭐️ UNIFIED THREAD CONTEXT STORE (with pruning) ⭐️ ---
+MAX_CONTEXTS = 20
+thread_context_store = collections.OrderedDict()
 
 # --- 🧠 ENHANCED NATURAL LANGUAGE ROUTER (LLM Function) ---
 def route_natural_language_query(query: str):
@@ -147,6 +149,7 @@ def handle_app_mention(event, say, client):
         )
         return
 
+    # Call the appropriate handler which will populate the context store
     if tool_name == "monthly-review":
         run_monthly_review(say, thread_ts, params, thread_context_store)
     elif tool_name == "analyse-influencer":
@@ -156,6 +159,12 @@ def handle_app_mention(event, say, client):
     elif tool_name == "plan":
         run_strategic_plan(client, say, event, thread_ts, params, thread_context_store)
 
+    # Prune the context store after the request is handled
+    while len(thread_context_store) > MAX_CONTEXTS:
+        oldest_thread, _ = thread_context_store.popitem(last=False)
+        logger.info(f"Context store full ({len(thread_context_store)} > {MAX_CONTEXTS}). Pruned oldest context for thread: {oldest_thread}")
+
+
 # --- THREAD MESSAGE ROUTING ---
 @app.event("message")
 def route_thread_messages(event, say):
@@ -164,6 +173,9 @@ def route_thread_messages(event, say):
         return
 
     if thread_ts in thread_context_store:
+        # Refresh the position of the accessed thread to keep it from being pruned
+        thread_context_store.move_to_end(thread_ts)
+        
         context = thread_context_store[thread_ts]
         context_type = context.get("type")
         logger.info(f"Routing thread message in {thread_ts} to handler of type: '{context_type}'")
@@ -183,7 +195,6 @@ def route_thread_messages(event, say):
 def route_monthly_review(ack, say, command):
     ack()
     text = command.get('text', '').strip()
-    # For slash commands, we simulate the LLM's output by manually calling the router
     initial_response = say(f"Running command `/monthly-review {text}`...")
     routing_decision = route_natural_language_query(f"monthly review for {text.replace('-', ' ')}")
     params = routing_decision.get("parameters", {})
