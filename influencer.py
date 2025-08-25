@@ -26,7 +26,6 @@ except KeyError as e:
 
 # --- CONSTANTS AND HELPERS ---
 MARKET_CURRENCY_SYMBOLS = { 'SWEDEN': 'SEK', 'NORWAY': 'NOK', 'DENMARK': 'DKK', 'UK': '£', 'FRANCE': '€', 'NORDICS': '€' }
-# Use inverse rates for converting local to EUR, assuming base rates are local per 1 EUR.
 EUR_TO_LOCAL_RATE = { "EUR": 1.0, "GBP": 0.85, "SEK": 11.30, "NOK": 11.50, "DKK": 7.46 }
 LOCAL_CURRENCY_TO_EUR_RATE = {key: 1/value for key, value in EUR_TO_LOCAL_RATE.items()}
 
@@ -128,10 +127,9 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         influencer_name = params['influencer_name']
         filters = {"influencer_name": influencer_name}
         
-        # Optional parameters, already cleaned by main.py
         if 'year' in params:
             filters['year'] = params['year']
-        if 'month_full' in params: # The influencer analytics API expects the full month name
+        if 'month_full' in params:
             filters['month'] = params['month_full']
 
     except KeyError as e:
@@ -171,14 +169,19 @@ def run_influencer_analysis(say, thread_ts, params, thread_context_store):
         response = gemini_model.generate_content(prompt)
         ai_analysis = response.text
 
+        # Store full context for potential follow-up questions
         thread_context_store[thread_ts] = {
             'type': 'influencer_analysis',
             'influencer_name': influencer_name,
             'filters': filters,
-            'campaigns': campaigns,
-            'summary_stats': summary_stats
+            'raw_api_data': api_data,
+            'summary_stats': summary_stats,
+            'bot_response': ai_analysis
         }
-        logger.success(f"Context stored for thread {thread_ts}")
+        # Refresh its position if it already exists
+        if thread_ts in thread_context_store:
+            thread_context_store.move_to_end(thread_ts)
+        logger.success(f"Full context stored for thread {thread_ts}")
 
         for chunk in split_message_for_slack(ai_analysis):
             say(text=chunk, thread_ts=thread_ts)
@@ -205,13 +208,19 @@ def handle_thread_messages(event, say, context):
         - Influencer Name: {context.get('influencer_name')}
         - Original Filters: {json.dumps(context.get('filters', {}))}
         
-        **Available Data (JSON):**
-        {json.dumps(context, indent=2)}
+        **Your Previous Analysis (for reference):**
+        ---
+        {context.get('bot_response', 'No previous analysis was stored.')}
+        ---
+
+        **Full Raw Data Available (JSON):**
+        {json.dumps(context.get('raw_api_data', {}), indent=2)}
 
         **User's Follow-up Question:** "{user_message}"
 
         **Instructions:**
-        - Answer the user's question directly using only the provided JSON data.
+        - Answer the user's question directly using only the provided **Full Raw Data**.
+        - Your previous analysis is for context, but base your new answer on the raw data for maximum accuracy.
         - Be concise and to the point.
         - If the data needed is not present, state that clearly.
         - Use correct currency formatting when referencing financial data from the 'campaigns' list.
