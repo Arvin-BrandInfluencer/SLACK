@@ -11,7 +11,7 @@ from loguru import logger
 
 # --- 1. CONFIGURATION & INITIALIZATION ---
 
-# --- Loguru Configuration (can be kept for module-specific logging) ---
+# --- Loguru Configuration ---
 logger.remove()
 logger.add(
     sys.stderr,
@@ -20,7 +20,6 @@ logger.add(
 )
 
 # --- Environment & Client Initialization ---
-# NOTE: We no longer need the full Slack App here. We just need the Gemini client.
 load_dotenv()
 try:
     GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
@@ -31,7 +30,7 @@ except KeyError as e:
     logger.critical(f"FATAL: Missing GOOGLE_API_KEY. Please check .env file.")
     sys.exit(1)
 
-# --- CONSTANTS AND HELPERS (Unchanged) ---
+# --- CONSTANTS AND HELPERS ---
 MARKET_CURRENCY_CONFIG = {
     'SWEDEN':  {'rate': 11.30, 'symbol': 'SEK', 'name': 'SEK'},
     'NORWAY':  {'rate': 11.50, 'symbol': 'NOK', 'name': 'NOK'},
@@ -58,16 +57,17 @@ ABBR_TO_FULL_MONTH_MAP = {
     'Sep': 'September', 'Oct': 'October', 'Nov': 'November', 'Dec': 'December'
 }
 
-# --- All helper functions (get_currency_info, format_currency, split_message_for_slack, etc.) remain the same ---
-# (Copying them here for completeness)
 def get_currency_info(market):
-    return MARKET_CURRENCY_CONFIG.get(market.upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
+    """Get currency conversion rate and symbol for a market, defaulting to EUR."""
+    return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def convert_eur_to_local(amount_eur, market):
+    """Convert an amount from EUR to the specified market's local currency."""
     currency_info = get_currency_info(market)
     return amount_eur * currency_info['rate']
 
 def format_currency(amount, market):
+    """Format an amount with the correct currency symbol and formatting for the market."""
     currency_info = get_currency_info(market)
     symbol = currency_info['symbol']
     if currency_info['name'] in ['SEK', 'NOK', 'DKK']:
@@ -76,19 +76,33 @@ def format_currency(amount, market):
         return f"{symbol}{amount:,.2f}"
 
 def split_message_for_slack(message: str, max_length: int = 2800) -> list:
-    if len(message) <= max_length: return [message]
+    """Split long messages into chunks that fit within Slack's limits, preserving code blocks."""
+    if len(message) <= max_length:
+        return [message]
+    
     chunks, current_chunk, in_code_block = [], "", False
-    for line in message.split('\n'):
-        if line.strip().startswith('```'): in_code_block = not in_code_block
+    lines = message.split('\n')
+    
+    for line in lines:
+        if line.strip().startswith('```'):
+            in_code_block = not in_code_block
         if len(current_chunk) + len(line) + 1 > max_length:
-            if in_code_block and current_chunk: current_chunk += "\n```"; in_code_block = False
-            if current_chunk: chunks.append(current_chunk)
+            if in_code_block and current_chunk.strip():
+                current_chunk += "\n```"
+                in_code_block = False
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
             current_chunk = "```\n" + line + "\n" if in_code_block else line + "\n"
-        else: current_chunk += line + "\n"
-    if current_chunk: chunks.append(current_chunk)
+        else:
+            current_chunk += line + "\n"
+    
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
     return chunks
 
 def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
+    """Generic function to query an API endpoint."""
     logger.info(f"Querying {endpoint_name} API at {url} with payload: {payload}")
     try:
         response = requests.post(url, json=payload, timeout=30)
@@ -99,9 +113,7 @@ def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
 def create_monthly_review_prompt(market, month, year, target_data, actual_data):
-    # This entire complex prompt function remains exactly the same.
-    # ... (code for the prompt function is identical to your original file)
-    # --- Data Extraction ---
+    """Create LLM prompt for monthly performance review with market-specific currency and improved CAC logic."""
     target_budget_local = target_data.get("kpis", {}).get("total_target_budget", 0)
     metrics = actual_data.get("metrics", {})
     actual_spend_eur = metrics.get("budget_spent_eur", 0)
@@ -109,12 +121,84 @@ def create_monthly_review_prompt(market, month, year, target_data, actual_data):
     influencers = actual_data.get("influencers", [])
     total_conversions = metrics.get("conversions", 0)
     total_influencers = len(influencers)
+    avg_budget_per_influencer_local = actual_spend_local / total_influencers if total_influencers > 0 else 0
     avg_cac_local = actual_spend_local / total_conversions if total_conversions > 0 else 0
-    # ... and so on, the rest of the function is identical.
-    return "..." # Placeholder for your very detailed prompt string
+    budget_utilization = (actual_spend_local / target_budget_local * 100) if target_budget_local > 0 else 0
+    influencer_performance = [{'name': inf.get('name', 'Unknown'), 'budget': inf.get('budget_local', 0), 'conversions': inf.get('conversions', 0), 'cac': inf.get('cac_local', 0)} for inf in influencers]
+    performers_with_conversions = [p for p in influencer_performance if p['conversions'] > 0 and p['cac'] > 0]
+    performers_with_zero_conversions = [p for p in influencer_performance if p['conversions'] == 0 or p['cac'] == 0]
+    best_cac_performer = min(performers_with_conversions, key=lambda x: x['cac']) if performers_with_conversions else None
+    worst_performer = None
+    if performers_with_zero_conversions:
+        worst_performer = max(performers_with_zero_conversions, key=lambda x: x['budget'])
+    elif performers_with_conversions:
+        worst_performer = max(performers_with_conversions, key=lambda x: x['cac'])
+    sorted_by_conversions = sorted(influencer_performance, key=lambda x: x['conversions'], reverse=True)
+    most_conversions_performer = sorted_by_conversions[0] if sorted_by_conversions else None
+    best_cac_str = f"{best_cac_performer['name']} - {format_currency(best_cac_performer['cac'], market)}" if best_cac_performer else 'N/A (No conversions)'
+    most_conv_str = f"{most_conversions_performer['name']} - {most_conversions_performer['conversions']} conversions" if most_conversions_performer else 'N/A'
+    worst_performer_str = 'N/A'
+    if worst_performer:
+        if worst_performer['conversions'] == 0 or worst_performer['cac'] == 0:
+            worst_performer_str = f"{worst_performer['name']} (0 conv. for {format_currency(worst_performer['budget'], market)})"
+        else:
+            worst_performer_str = f"{worst_performer['name']} - {format_currency(worst_performer['cac'], market)}"
+    top_10_table_rows = []
+    for p in sorted_by_conversions[:10]:
+        performance_emoji = "⚫"
+        if p['conversions'] > 0 and p['cac'] > 0:
+            performance_emoji = "🟢" if p['cac'] <= avg_cac_local else ("🟡" if p['cac'] <= avg_cac_local * 1.5 else "🔴")
+        cac_display = format_currency(p['cac'], market) if p['conversions'] > 0 and p['cac'] > 0 else 'N/A'
+        row = (f"{p['name']:<18} | {format_currency(p['budget'], market):>11} | {p['conversions']:<4} | {cac_display:>8} | {performance_emoji}")
+        top_10_table_rows.append(row)
+    top_10_table_str = "\n".join(top_10_table_rows)
+    prompt = f"""
+    You are a performance marketing analyst. Generate a comprehensive and concise monthly performance review for Slack using the data provided. Use code block formatting for clarity.
+
+    **PERFORMANCE DATA FOR {market.upper()} - {month.upper()} {year}:**
+    
+    1. **Performance Summary (Code Block):**
+    ```
+    Monthly Performance Review - {market.upper()} {month.upper()} {year}
+    ================================================================
+    Target Budget:        {format_currency(target_budget_local, market)}
+    Actual Spend:         {format_currency(actual_spend_local, market)} ({budget_utilization:.1f}%)
+    Total Conversions:    {total_conversions}
+    Total Influencers:    {total_influencers}
+    Average CAC:          {format_currency(avg_cac_local, market)}
+    Avg Budget/Influencer:{format_currency(avg_budget_per_influencer_local, market)}
+    ```
+
+    2. **Performance Highlights & Areas for Improvement (Code Block):**
+    ```
+    Key Performers
+    ================================================================
+    🏆 Best CAC:         {best_cac_str}
+    💰 Most Conversions:  {most_conv_str}
+    ⚠️  Worst Performer:  {worst_performer_str}
+    ```
+    
+    3. **Top 10 Influencers Performance Table (Code Block):**
+    ```
+    Top 10 Influencer Performance (by Conversions)
+    ================================================================
+    Name               | Budget      | Conv | CAC      | Performance
+    -------------------|-------------|------|----------|-------------
+    {top_10_table_str}
+    ```
+
+    4. **Key Learnings (3-4 bullet points):**
+    - Based on the data, what were the key takeaways?
+    - Highlight the impact of zero-conversion influencers on overall performance.
+    - Was the budget utilized effectively?
+
+    5. **Next Month Recommendations (2-3 points):**
+    - Actionable suggestions prioritizing conversion-generating influencers.
+    - Recommend pausing/reducing budget for zero-conversion performers.
+    """
+    return prompt
 
 # --- ✅ 2. CORE LOGIC FUNCTION ---
-# This is called by main.py for both @mentions and slash commands.
 def run_monthly_review(say, thread_ts, params, thread_context_store):
     """
     Executes the monthly review logic and posts the results to a specific thread.
@@ -134,7 +218,6 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
         say(f"❌ I'm missing some information. For a monthly review, I need a valid Market, Month, and Year. Error: {e}", thread_ts=thread_ts)
         return
 
-    # --- API Calls and Analysis (All messages go to the thread) ---
     say("Step 1/3: Fetching target data...", thread_ts=thread_ts)
     target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
     if "error" in target_data:
@@ -153,15 +236,12 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
 
     say("Step 3/3: Analyzing data and generating review...", thread_ts=thread_ts)
     try:
-        # We need the full prompt function available here
-        # For brevity, assuming create_monthly_review_prompt is defined above in the file
         prompt = create_monthly_review_prompt(market, raw_month_input, year, target_data, actual_data)
         response = gemini_model.generate_content(prompt)
         ai_review = response.text
         
-        # --- Store context in the UNIFIED store provided by main.py ---
         thread_context_store[thread_ts] = {
-            'type': 'monthly_review', # This is crucial for routing follow-ups
+            'type': 'monthly_review',
             'market': market,
             'month': raw_month_input,
             'year': year,
@@ -176,7 +256,6 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
         }
         logger.success(f"Context stored for thread {thread_ts}")
 
-        # Post the final report in chunks to the thread
         for chunk in split_message_for_slack(ai_review):
             say(text=chunk, thread_ts=thread_ts)
             
@@ -187,7 +266,6 @@ def run_monthly_review(say, thread_ts, params, thread_context_store):
     logger.success(f"Review completed for {market}-{raw_month_input}-{year}")
 
 # --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
-# This is called by main.py when a user replies in a thread managed by this module.
 def handle_thread_messages(event, say, context):
     """
     Handles follow-up questions in a monthly review thread.
@@ -199,7 +277,6 @@ def handle_thread_messages(event, say, context):
     logger.info(f"Handling follow-up for monthly_review in thread {thread_ts}")
 
     try:
-        # Create context-aware prompt using the `context` dictionary passed from main.py
         context_prompt = f"""
         You are a helpful marketing analyst assistant. A user is asking a follow-up question about a monthly review you already provided. Use the following data to answer them.
 
@@ -216,7 +293,7 @@ def handle_thread_messages(event, say, context):
         **Instructions:**
         - Answer the user's question directly using only the provided JSON data.
         - Be concise and to the point.
-        - If the data needed to answer is not present, state that clearly.
+        - If the data needed is not present, state that clearly.
         - Use correct currency formatting for the market ({context['market'].upper()}).
         """
         
