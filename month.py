@@ -1,5 +1,5 @@
 # ================================================
-# FILE: month.py (Refactored for Unified Context)
+# FILE: month.py (FINAL - BUGS FIXED)
 # ================================================
 import os
 import sys
@@ -12,7 +12,6 @@ from loguru import logger
 # --- 1. CONFIGURATION & INITIALIZATION ---
 logger.remove()
 logger.add(sys.stderr, format="<yellow>{time:YYYY-MM-DD HH:mm:ss}</yellow> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>", colorize=True)
-
 load_dotenv()
 try:
     GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
@@ -25,244 +24,112 @@ except KeyError as e:
 
 # --- CONSTANTS AND HELPERS ---
 MARKET_CURRENCY_CONFIG = { 'SWEDEN': {'rate': 11.30, 'symbol': 'SEK', 'name': 'SEK'}, 'NORWAY': {'rate': 11.50, 'symbol': 'NOK', 'name': 'NOK'}, 'DENMARK': {'rate': 7.46, 'symbol': 'DKK', 'name': 'DKK'}, 'UK': {'rate': 0.85, 'symbol': '£', 'name': 'GBP'}, 'FRANCE': {'rate': 1.0, 'symbol': '€', 'name': 'EUR'}, }
-BASE_API_URL = os.getenv("BASE_API_URL", "https://lyra-final.onrender.com")
-TARGET_API_URL = f"{BASE_API_URL}/api/dashboard/targets"
-ACTUALS_API_URL = f"{BASE_API_URL}/api/monthly_breakdown"
-
-def get_currency_info(market):
-    return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
-
-def convert_eur_to_local(amount_eur, market):
-    currency_info = get_currency_info(market)
-    return amount_eur * currency_info['rate']
+BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:10000")
+UNIFIED_API_URL = f"{BASE_API_URL}/api/influencer/query"
+def get_currency_info(market): return MARKET_CURRENCY_CONFIG.get(str(market).upper(), {'rate': 1.0, 'symbol': '€', 'name': 'EUR'})
 
 def format_currency(amount, market):
     currency_info = get_currency_info(market)
     symbol = currency_info['symbol']
-    if currency_info['name'] in ['SEK', 'NOK', 'DKK']:
-        return f"{amount:,.0f} {symbol}"
-    else:
-        return f"{symbol}{amount:,.2f}"
+    try:
+        safe_amount = float(amount or 0.0)
+        if currency_info['name'] in ['SEK', 'NOK', 'DKK']: return f"{safe_amount:,.0f} {symbol}"
+        else: return f"{symbol}{safe_amount:,.2f}"
+    except (ValueError, TypeError): return f"{symbol}0.00"
 
 def split_message_for_slack(message: str, max_length: int = 2800) -> list:
+    if not message: return []
     if len(message) <= max_length: return [message]
-    chunks, current_chunk, in_code_block = [], "", False
+    chunks, current_chunk = [], ""
     for line in message.split('\n'):
-        if line.strip().startswith('```'): in_code_block = not in_code_block
         if len(current_chunk) + len(line) + 1 > max_length:
-            if in_code_block and current_chunk: current_chunk += "\n```"; in_code_block = False
-            if current_chunk: chunks.append(current_chunk)
-            current_chunk = "```\n" + line + "\n" if in_code_block else line + "\n"
-        else: current_chunk += line + "\n"
-    if current_chunk: chunks.append(current_chunk)
+            if current_chunk.strip(): chunks.append(current_chunk)
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+    if current_chunk.strip(): chunks.append(current_chunk)
     return chunks
 
 def query_api(url: str, payload: dict, endpoint_name: str) -> dict:
     logger.info(f"Querying {endpoint_name} API at {url} with payload: {payload}")
     try:
-        response = requests.post(url, json=payload, timeout=30)
+        response = requests.post(url, json=payload, timeout=60)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"{endpoint_name} API Connection Error: {e}")
         return {"error": f"Could not connect to the {endpoint_name} API."}
 
-def create_monthly_review_prompt(market, month, year, target_data, actual_data):
-    target_budget_local = target_data.get("kpis", {}).get("total_target_budget", 0)
-    metrics = actual_data.get("metrics", {})
-    actual_spend_eur = metrics.get("budget_spent_eur", 0)
-    actual_spend_local = convert_eur_to_local(actual_spend_eur, market)
-    influencers = actual_data.get("influencers", [])
-    total_conversions = metrics.get("conversions", 0)
-    total_influencers = len(influencers)
-    avg_budget_per_influencer_local = actual_spend_local / total_influencers if total_influencers > 0 else 0
-    avg_cac_local = actual_spend_local / total_conversions if total_conversions > 0 else 0
-    budget_utilization = (actual_spend_local / target_budget_local * 100) if target_budget_local > 0 else 0
-    influencer_performance = [{'name': inf.get('name', 'Unknown'), 'budget': inf.get('budget_local', 0), 'conversions': inf.get('conversions', 0), 'cac': inf.get('cac_local', 0)} for inf in influencers]
-    performers_with_conversions = [p for p in influencer_performance if p['conversions'] > 0 and p['cac'] > 0]
-    performers_with_zero_conversions = [p for p in influencer_performance if p['conversions'] == 0 or p['cac'] == 0]
-    best_cac_performer = min(performers_with_conversions, key=lambda x: x['cac']) if performers_with_conversions else None
-    worst_performer = None
-    if performers_with_zero_conversions:
-        worst_performer = max(performers_with_zero_conversions, key=lambda x: x['budget'])
-    elif performers_with_conversions:
-        worst_performer = max(performers_with_conversions, key=lambda x: x['cac'])
-    sorted_by_conversions = sorted(influencer_performance, key=lambda x: x['conversions'], reverse=True)
-    most_conversions_performer = sorted_by_conversions[0] if sorted_by_conversions else None
-    best_cac_str = f"{best_cac_performer['name']} - {format_currency(best_cac_performer['cac'], market)}" if best_cac_performer else 'N/A (No conversions)'
-    most_conv_str = f"{most_conversions_performer['name']} - {most_conversions_performer['conversions']} conversions" if most_conversions_performer else 'N/A'
-    worst_performer_str = 'N/A'
-    if worst_performer:
-        if worst_performer['conversions'] == 0 or worst_performer['cac'] == 0:
-            worst_performer_str = f"{worst_performer['name']} (0 conv. for {format_currency(worst_performer['budget'], market)})"
-        else:
-            worst_performer_str = f"{worst_performer['name']} - {format_currency(worst_performer['cac'], market)}"
-    top_10_table_rows = []
-    for p in sorted_by_conversions[:10]:
-        performance_emoji = "⚫"
-        if p['conversions'] > 0 and p['cac'] > 0:
-            performance_emoji = "🟢" if p['cac'] <= avg_cac_local else ("🟡" if p['cac'] <= avg_cac_local * 1.5 else "🔴")
-        cac_display = format_currency(p['cac'], market) if p['conversions'] > 0 and p['cac'] > 0 else 'N/A'
-        row = (f"{p['name']:<18} | {format_currency(p['budget'], market):>11} | {p['conversions']:<4} | {cac_display:>8} | {performance_emoji}")
-        top_10_table_rows.append(row)
-    top_10_table_str = "\n".join(top_10_table_rows)
-    prompt = f"""
-    You are a performance marketing analyst. Generate a comprehensive and concise monthly performance review for Slack using the data provided. Use code block formatting for clarity.
-
-    **PERFORMANCE DATA FOR {market.upper()} - {month.upper()} {year}:**
-    
-    1. **Performance Summary (Code Block):**
-    ```
-    Monthly Performance Review - {market.upper()} {month.upper()} {year}
-    ================================================================
-    Target Budget:        {format_currency(target_budget_local, market)}
-    Actual Spend:         {format_currency(actual_spend_local, market)} ({budget_utilization:.1f}%)
-    Total Conversions:    {total_conversions}
-    Total Influencers:    {total_influencers}
-    Average CAC:          {format_currency(avg_cac_local, market)}
-    Avg Budget/Influencer:{format_currency(avg_budget_per_influencer_local, market)}
-    ```
-
-    2. **Performance Highlights & Areas for Improvement (Code Block):**
-    ```
-    Key Performers
-    ================================================================
-    🏆 Best CAC:         {best_cac_str}
-    💰 Most Conversions:  {most_conv_str}
-    ⚠️  Worst Performer:  {worst_performer_str}
-    ```
-    
-    3. **Top 10 Influencers Performance Table (Code Block):**
-    ```
-    Top 10 Influencer Performance (by Conversions)
-    ================================================================
-    Name               | Budget      | Conv | CAC      | Performance
-    -------------------|-------------|------|----------|-------------
-    {top_10_table_str}
-    ```
-
-    4. **Key Learnings (3-4 bullet points):**
-    - Based on the data, what were the key takeaways?
-    - Highlight the impact of zero-conversion influencers on overall performance.
-    - Was the budget utilized effectively?
-
-    5. **Next Month Recommendations (2-3 points):**
-    - Actionable suggestions prioritizing conversion-generating influencers.
-    - Recommend pausing/reducing budget for zero-conversion performers.
+def create_prompt(user_query, market, month, year, target_budget_local, actual_data, is_full_review):
+    return f"""
+    You are Nova, a marketing analyst.
+    {"Generate a comprehensive monthly performance review." if is_full_review else "Provide a concise, direct answer to the user's question."}
+    **Data Context for {market.upper()} - {month.upper()} {year}:**
+    {json.dumps({"Target Budget": format_currency(target_budget_local, market), "Actuals": actual_data}, indent=2)}
+    **User's Request:** "{user_query if user_query else "A full monthly review."}"
+    **Instructions:** Analyze the request and data. Formulate a clear, well-structured response using bold for key metrics. If data is missing, state it clearly.
     """
-    return prompt
 
-# --- ✅ 2. CORE LOGIC FUNCTION ---
-def run_monthly_review(say, thread_ts, params, thread_context_store):
-    """
-    Executes the monthly review logic. It receives pre-validated, clean parameters from main.py.
-    """
+# --- CORE LOGIC FUNCTION ---
+def run_monthly_review(say, thread_ts, params, thread_context_store, user_query=None):
     try:
-        market = params['market']
-        month_abbr = params['month_abbr']
-        month_full = params['month_full']
-        year = params['year']
+        market, month_abbr, month_full, year = params['market'], params['month_abbr'], params['month_full'], params['year']
     except KeyError as e:
-        say(f"❌ A required parameter was missing from the routing decision: {e}", thread_ts=thread_ts)
-        return
+        say(f"A required parameter was missing: {e}.", thread_ts=thread_ts); return
 
-    say(f"Generating review for *{market.upper()}* - *{month_full} {year}*...", thread_ts=thread_ts)
-
-    say("Step 1/3: Fetching target data...", thread_ts=thread_ts)
-    target_data = query_api(TARGET_API_URL, {"filters": {"market": market, "month": month_abbr, "year": year}}, "Targets")
+    target_payload = {"source": "dashboard", "filters": {"market": market, "year": year}}
+    target_data = query_api(UNIFIED_API_URL, target_payload, "Dashboard (Targets)")
     if "error" in target_data:
-        say(f"❌ Target API Error: `{target_data['error']}`", thread_ts=thread_ts)
-        return
+        say(f"API Error: `{target_data['error']}`", thread_ts=thread_ts); return
     
-    say("Step 2/3: Fetching monthly performance data...", thread_ts=thread_ts)
-    actual_data = query_api(ACTUALS_API_URL, {"filters": {"market": market, "month": month_full, "year": year}}, "Actuals")
-    if "error" in actual_data:
-        say(f"❌ Actuals API Error: `{actual_data['error']}`", thread_ts=thread_ts)
-        return
+    # CORRECTED: Made the month abbreviation comparison case-insensitive to fix the target budget lookup.
+    target_budget_local = next((float(m.get("target_budget_clean", 0)) for m in target_data.get("monthly_detail", []) if str(m.get("month", "")).lower() == str(month_abbr).lower()), 0)
+    
+    actuals_payload = {"source": "influencer_analytics", "view": "monthly_breakdown", "filters": {"market": market, "month": month_full, "year": year}}
+    actual_data_response = query_api(UNIFIED_API_URL, actuals_payload, "Influencer Analytics (Monthly)")
+    if "error" in actual_data_response:
+        say(f"API Error: `{actual_data_response['error']}`", thread_ts=thread_ts); return
 
-    if not actual_data.get("influencers"):
-        say(f"✅ **No performance data found** for {market.upper()} {month_full} {year}. No influencers were active in this period.", thread_ts=thread_ts)
-        return
+    if not actual_data_response.get("monthly_data"):
+        say(f"No performance data found for {market.upper()} {month_full} {year}.", thread_ts=thread_ts); return
+    actual_data = actual_data_response["monthly_data"][0]
 
-    say("Step 3/3: Analyzing data and generating review...", thread_ts=thread_ts)
     try:
-        prompt = create_monthly_review_prompt(market, month_full, year, target_data, actual_data)
-        response = gemini_model.generate_content(prompt)
-        ai_review = response.text
+        is_full_review = not user_query or any(kw in user_query.lower() for kw in ["review", "summary", "analysis"])
+        prompt = create_prompt(user_query, market, month_full, year, target_budget_local, actual_data, is_full_review)
         
-        # Store full context for potential follow-up questions
+        response = gemini_model.generate_content(prompt)
+        ai_answer = response.text
+        
         thread_context_store[thread_ts] = {
-            'type': 'monthly_review',
-            'market': market,
-            'month': month_full,
-            'year': year,
-            'raw_target_data': target_data,
-            'raw_actual_data': actual_data,
-            'bot_response': ai_review,
-            'summary_metrics': {
-                'target_budget_local': target_data.get("kpis", {}).get("total_target_budget", 0),
-                'actual_spend_local': convert_eur_to_local(actual_data.get("metrics", {}).get("budget_spent_eur", 0), market),
-                'total_conversions': actual_data.get("metrics", {}).get("conversions", 0),
-                'total_influencers': len(actual_data.get("influencers", []))
-            }
+            'type': 'monthly_review', 'params': params,
+            'raw_target_data': target_data, 'raw_actual_data': actual_data_response, 'bot_response': ai_answer
         }
-        # Refresh its position if it already exists to avoid being pruned
-        if thread_ts in thread_context_store:
-            thread_context_store.move_to_end(thread_ts)
-        logger.success(f"Full context stored for thread {thread_ts}")
-
-        for chunk in split_message_for_slack(ai_review):
-            say(text=chunk, thread_ts=thread_ts)
-            
+        
+        for chunk in split_message_for_slack(ai_answer): say(text=chunk, thread_ts=thread_ts)
     except Exception as e:
-        logger.error(f"Error during AI review generation: {e}")
-        say(f"❌ An error occurred while generating the AI summary: `{str(e)}`", thread_ts=thread_ts)
-    
+        logger.error(f"Error during AI review generation: {e}"); say(f"An error occurred generating the AI summary: {str(e)}", thread_ts=thread_ts)
     logger.success(f"Review completed for {market}-{month_full}-{year}")
 
-# --- ✅ 3. THREAD FOLLOW-UP HANDLER ---
-def handle_thread_messages(event, say, context):
-    """
-    Handles follow-up questions in a monthly review thread.
-    """
+# --- THREAD FOLLOW-UP HANDLER ---
+def handle_thread_messages(event, say, client, context):
     user_message = event.get("text", "").strip()
     thread_ts = event["thread_ts"]
-    
     logger.info(f"Handling follow-up for monthly_review in thread {thread_ts}")
-
     try:
         context_prompt = f"""
-        You are a helpful marketing analyst assistant. A user is asking a follow-up question about a monthly review you already provided. Use the following data to answer them.
-
-        **Original Review Context:**
-        - Market: {context['market'].upper()}
-        - Period: {context['month']} {context['year']}
+        You are a helpful marketing analyst assistant.
+        **Current Context:** A Monthly Review for **{context['params']['market']}** for **{context['params']['month_full']} {context['params']['year']}**.
+        **Available Data:** You have the full JSON data for this specific review: {json.dumps({'targets': context.get('raw_target_data', {}), 'actuals': context.get('raw_actual_data', {})})}
         
-        **Your Previous Analysis (for reference):**
-        ---
-        {context.get('bot_response', 'No previous analysis was stored.')}
-        ---
+        **User's Follow-up:** "{user_message}"
         
-        **Full Raw Data Available (JSON):**
-        - Target Data: {json.dumps(context.get('raw_target_data', {}))}
-        - Actual Performance Data: {json.dumps(context.get('raw_actual_data', {}))}
-
-        **User's Follow-up Question:** "{user_message}"
-
         **Instructions:**
-        - Answer the user's question directly using the **Full Raw Data** provided.
-        - Your previous analysis is for context, but base your new answer on the raw data for maximum accuracy.
-        - Be concise and to the point.
-        - If the data needed is not present, state that clearly.
-        - Use correct currency formatting for the market ({context['market'].upper()}).
+        1. Answer the user's question **ONLY** using the data provided in the "Available Data" section.
+        2. If the user asks about a different month, market, or requires a comparison to data not present, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for the June UK review. To compare with November, you would need to ask me to run a new analysis for November."
         """
-        
         response = gemini_model.generate_content(context_prompt)
         ai_response = response.text
-        
-        for chunk in split_message_for_slack(ai_response):
-            say(text=chunk, thread_ts=thread_ts)
-            
+        for chunk in split_message_for_slack(ai_response): say(text=chunk, thread_ts=thread_ts)
     except Exception as e:
-        logger.error(f"Error handling thread message in month.py: {e}")
-        say(text="❌ Sorry, I encountered an error processing your follow-up question.", thread_ts=thread_ts)
+        logger.error(f"Error handling thread message in month.py: {e}"); say(text="Sorry, I encountered an error.", thread_ts=thread_ts)
