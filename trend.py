@@ -99,6 +99,7 @@ def handle_thread_messages(event, say, client, context):
         **Your Task - Follow these steps in order:**
         1.  **Analyze and Answer:** Answer the user's question by analyzing the **Available Data** for the current trend report.
         2.  **State Missing Data:** If the question asks for something not in the data, or requires comparing to data outside of the current filters, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for the trend report with filters {json.dumps(context.get('params', {}))}. To see data for a different market or month, please ask me to run a new trend analysis."
+        3. **Natural Language:** Frame your response naturally. Avoid phrases like "Based on the data," or "According to the information provided".
         """
         response = model.generate_content(context_prompt)
         ai_response = response.text.strip()
