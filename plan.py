@@ -123,7 +123,7 @@ Projected Avg CAC: {format_currency(avg_cac, market)}
 Influencer Name | Tier | Budget | Conv. | Est. CAC
 {rec_table_str}
 """
-    prompt = f"""You are Nova, a marketing analyst. Below is a pre-formatted marketing plan. Your ONLY task is to add a short "Strategic Insights" section at the end. Base your insights ONLY on the data presented in the plan.
+    prompt = f"""You are Nova, a marketing analyst. Below is a pre-formatted marketing plan. Your ONLY task is to add a short "Strategic Insights" section at the end. Base your insights ONLY on the data presented in the plan.Your insights should be direct and actionable; do not state "based on the data" or similar introductory phrases.
 
 {pre_formatted_report}
 
@@ -202,6 +202,7 @@ def handle_thread_replies(event, say, client, context):
         1.  Answer the user's question **ONLY** using the data provided for the current plan's context ({context['params']['month_full']} {context['params']['year']}).
         2.  **CRITICAL:** If the user asks to compare this plan to a different time period (e.g., "how many of these influencers were used in June?"), you MUST state that you do not have the data for the other period in your current context.
             - Correct response example: "That's a great question. I can't directly compare, as my current context is only the November plan. I don't have the June data loaded right now. To answer, I'd need to run a new review for June."
+        3. Present your answer naturally, without phrases like "based on the provided data".
         """
         response = gemini_model.generate_content(context_prompt)
         for chunk in split_message_for_slack(response.text):
