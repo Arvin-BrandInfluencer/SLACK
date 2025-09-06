@@ -67,7 +67,7 @@ def create_prompt(user_query, market, month, year, target_budget_local, actual_d
     **Data Context for {market.upper()} - {month.upper()} {year}:**
     {json.dumps({"Target Budget": format_currency(target_budget_local, market), "Actuals": actual_data}, indent=2)}
     **User's Request:** "{user_query if user_query else "A full monthly review."}"
-    **Instructions:** Analyze the request and data. Formulate a clear, well-structured response using bold for key metrics. If data is missing, state it clearly.
+    **Instructions:** Analyze the request and data. Formulate a clear, well-structured response using bold for key metrics. If data is missing, state it clearly.Present insights naturally without mentioning "based on the data provided".
     """
 
 # --- CORE LOGIC FUNCTION ---
@@ -127,6 +127,7 @@ def handle_thread_messages(event, say, client, context):
         **Instructions:**
         1. Answer the user's question **ONLY** using the data provided in the "Available Data" section.
         2. If the user asks about a different month, market, or requires a comparison to data not present, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for the June UK review. To compare with November, you would need to ask me to run a new analysis for November."
+        3. Present your answer naturally, without phrases like "based on the provided data".
         """
         response = gemini_model.generate_content(context_prompt)
         ai_response = response.text
