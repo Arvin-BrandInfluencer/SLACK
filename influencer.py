@@ -51,7 +51,7 @@ def create_prompt(user_query, influencer_name, summary_stats, campaigns, is_deep
     - Summary Stats: {json.dumps(summary_stats)}
     - Full Campaign Data: {json.dumps(campaigns)}
     **User's Request:** "{user_query if user_query else "A full analysis."}"
-    **Instructions:** Frame your response as a helpful analyst. If data is sparse or missing, note it gracefully. Use bold formatting for key metrics.
+    **Instructions:** Frame your response as a helpful analyst. If data is sparse or missing, note it gracefully. Use bold formatting for key metrics.Present insights naturally without mentioning "based on the data provided".
     """
 
 # --- CORE LOGIC FUNCTION ---
@@ -110,7 +110,8 @@ def handle_thread_messages(event, say, client, context):
         
         **Instructions:**
         1. Answer the user's question **ONLY** using the data from the current context.
-        2. If the user asks about a different influencer or a comparison that requires new data, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for {context['params'].get('influencer_name')}. To analyze another influencer, please start a new request like '@nova analyse influencer [name]'."
+        2. If the user asks about a different influencer or a comparison that requires new data, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for {context['params'].get('influencer_name')}. To analyze another influencer, please start a new request like '@nova analyse influencer [name]'.
+        3. Present your answer naturally, without phrases like "based on the provided data".
         """
         response = gemini_model.generate_content(context_prompt)
         ai_response = response.text
