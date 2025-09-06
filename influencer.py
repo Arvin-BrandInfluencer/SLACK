@@ -110,7 +110,7 @@ def handle_thread_messages(event, say, client, context):
         
         **Instructions:**
         1. Answer the user's question **ONLY** using the data from the current context.
-        2. If the user asks about a different influencer or a comparison that requires new data, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for {context['params'].get('influencer_name')}. To analyze another influencer, please start a new request like '@nova analyse influencer [name]'.
+        2. If the user asks about a different influencer or a comparison that requires new data, you MUST state that you don't have that data in your current context. Example: "I can't answer that, as my current context is only for {context['params'].get('influencer_name')}. To analyze another influencer, please start a new request like '@nova analyse influencer [name]'."
         3. Present your answer naturally, without phrases like "based on the provided data".
         """
         response = gemini_model.generate_content(context_prompt)
