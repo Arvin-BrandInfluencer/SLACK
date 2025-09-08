@@ -1,5 +1,5 @@
 # ================================================
-# FILE: main.py (FINAL VERSION - ROBUST ROUTING & VALIDATION)
+# FILE: main.py (FINAL VERSION - ADVANCED WEEKLY ROUTING)
 # ================================================
 import os
 import sys
@@ -17,7 +17,7 @@ from month import run_monthly_review, handle_thread_messages as month_thread_han
 from influencer import run_influencer_analysis, handle_thread_messages as influencer_thread_handler
 from trend import run_influencer_trend, handle_thread_messages as trend_thread_handler
 from plan import run_strategic_plan, handle_thread_replies as plan_thread_handler
-from weekly import run_weekly_review, handle_thread_messages as weekly_thread_handler
+from weekly import run_weekly_review_by_range, run_weekly_review_by_number, handle_thread_messages as weekly_thread_handler
 
 # --- Loguru Configuration ---
 logger.remove()
@@ -43,25 +43,26 @@ thread_context_store = collections.OrderedDict()
 
 # --- NATURAL LANGUAGE ROUTERS ---
 def route_natural_language_query(query: str):
-    # --- MODIFIED PROMPT: STRONGER RULES FOR DATES AND MARKETS ---
     prompt = f"""
     You are an expert routing assistant. Map a user query to a tool and extract parameters.
 
     **RULES:**
     1.  Default `year` to `2025` if not specified.
     2.  Normalize `market` to UPPER CASE (e.g., "UK", "FRANCE").
-    3.  For any tool requiring a `market` (`monthly-review`, `weekly-review`, `plan`), if the user does NOT provide one, you MUST use the `clarify-market` tool. Do NOT return a null market.
-    4.  If the query contains a specific date range (e.g., "from June 1 to June 15", "between sep 1 and 30"), you MUST prioritize the `weekly-review` tool.
-    5.  ALWAYS generate `month_abbr` (3-letter) and `month_full` for monthly tools.
-    6.  ALWAYS generate `start_date` and `end_date` in YYYY-MM-DD format for weekly tools.
+    3.  If a query contains "week" or "wk" followed by a number (e.g., "week 36", "wk 5 performance"), you MUST prioritize the `weekly-review-by-number` tool.
+    4.  If a query contains a specific date range (e.g., "from June 1 to June 15", "on Sep 15th"), you MUST prioritize the `weekly-review-by-range` tool.
+    5.  For any tool requiring a `market`, if the user does NOT provide one, you MUST use the `clarify-market` tool. Do NOT return a null market.
+    6.  ALWAYS generate `month_abbr` (3-letter) and `month_full` for monthly tools.
+    7.  ALWAYS generate `start_date` and `end_date` in YYYY-MM-DD format for date range tools. If it's a single day, start and end dates are the same.
 
     **TOOLS:**
-    - `monthly-review`: For past performance of a whole month. Needs `market`, `month_abbr`, `month_full`, `year`.
-    - `weekly-review`: For performance in a specific date range. Needs `market`, `start_date`, `end_date`, `year`.
+    - `monthly-review`: For a whole month. Needs `market`, `month_abbr`, `month_full`, `year`.
+    - `weekly-review-by-range`: For a specific date range. Needs `market`, `start_date`, `end_date`, `year`.
+    - `weekly-review-by-number`: For a specific week number. Needs `market`, `week_number`, `year`.
     - `analyse-influencer`: For a specific influencer. Needs `influencer_name`.
-    - `influencer-trend`: For general leaderboards and comparisons.
+    - `influencer-trend`: For general leaderboards.
     - `plan`: For future budget allocation. Needs `market`, `month_abbr`, `month_full`, `year`.
-    - `clarify-market`: Use this if a market is required but missing. Needs `original_query`.
+    - `clarify-market`: Use if a market is required but missing. Needs `original_query`.
 
     **RESPONSE FORMAT:** JSON ONLY: `{{"tool_name": "...", "parameters": {{...}}}}`
     **USER QUERY:** "{query}"
@@ -78,21 +79,17 @@ def route_natural_language_query(query: str):
 def determine_thread_intent(user_message: str, context: dict):
     context_type = context.get('type', 'general discussion')
     context_params = context.get('params', {})
-    # --- MODIFIED PROMPT: STRONGER RULES FOR PIVOTING ---
     prompt = f"""
     You are an intent detection expert for a Slack bot.
-    The current conversation context is a `{context_type}` with parameters: `{json.dumps(context_params)}`.
-    The user's message is: "{user_message}"
-
+    The current context is `{context_type}`. The user's message is: "{user_message}"
     Your task is to determine if this is a `follow_up` or a `new_command`.
 
     **RULES:**
-    1.  A `follow_up` asks a question that can be answered using data from the CURRENT context. Examples: "who was best?", "why?", "show me the details".
-    2.  It is a `new_command` if the user explicitly asks for a DIFFERENT tool (e.g., "make a plan" during a "review").
-    3.  It is a `new_command` if the user introduces a completely new set of core parameters, such as a different month, a new market, or a specific date range.
+    1.  A `follow_up` asks a question answerable with the current context's data.
+    2.  It is a `new_command` if the user asks for a different tool or introduces a new set of core parameters like a different month, a new market, a specific date range, or a specific week number.
         - Example `new_command`: Context is November, user asks "now show me June".
-        - Example `new_command`: Context is a trend report, user asks "give me a weekly analysis for Sep 1 to 10". This introduces a date range, making it a new command.
-    4.  If in doubt, default to `new_command` to allow for re-routing.
+        - Example `new_command`: User asks "how about week 36?" during a monthly review.
+    3.  If in doubt, default to `new_command`.
 
     Respond with JSON ONLY: `{{"intent": "follow-up"}}` or `{{"intent": "new_command"}}`
     """
@@ -127,12 +124,11 @@ def handle_app_mention(event, say, client):
     params = routing_decision.get("parameters", {})
     params = _apply_default_year(params)
 
-    # --- NEW: VALIDATION AND CLARIFICATION LOGIC ---
     if tool_name == "clarify-market":
         client.chat_update(channel=event['channel'], ts=thinking_message['ts'], text=f"I can help with that! Which market are you interested in for the query: \"_{params.get('original_query')}_\"?")
         return
     
-    if tool_name in ["monthly-review", "weekly-review", "plan"] and not params.get("market"):
+    if tool_name in ["monthly-review", "weekly-review-by-range", "weekly-review-by-number", "plan"] and not params.get("market"):
         client.chat_update(channel=event['channel'], ts=thinking_message['ts'], text=f"It looks like a market is missing for that request. Which market should I analyze?")
         return
         
@@ -144,8 +140,11 @@ def handle_app_mention(event, say, client):
         return
     
     main_handler_map = {
-        "monthly-review": run_monthly_review, "weekly-review": run_weekly_review,
-        "analyse-influencer": run_influencer_analysis, "influencer-trend": run_influencer_trend,
+        "monthly-review": run_monthly_review, 
+        "weekly-review-by-range": run_weekly_review_by_range,
+        "weekly-review-by-number": run_weekly_review_by_number,
+        "analyse-influencer": run_influencer_analysis, 
+        "influencer-trend": run_influencer_trend,
         "plan": run_strategic_plan
     }
     if handler := main_handler_map.get(tool_name):
@@ -177,20 +176,21 @@ def route_thread_messages(event, say, client):
             params = routing_decision.get("parameters", {})
             params = _apply_default_year(params)
             
-            # --- NEW: VALIDATION AND CLARIFICATION LOGIC IN THREADS ---
             if new_tool == "clarify-market":
                 say(f"I can do that! Which market are you interested in for: \"_{params.get('original_query')}_\"?", thread_ts=thread_ts)
                 return
-            
-            if new_tool in ["monthly-review", "weekly-review", "plan"] and not params.get("market"):
+            if new_tool in ["monthly-review", "weekly-review-by-range", "weekly-review-by-number", "plan"] and not params.get("market"):
                 say(f"It looks like a market is missing for that request. Which market should I analyze?", thread_ts=thread_ts)
                 return
 
             if new_tool and new_tool != "error":
                 say(f"Pivoting to a new analysis: *{new_tool}*...", thread_ts=thread_ts)
                 main_handler_map = {
-                    "monthly-review": run_monthly_review, "weekly-review": run_weekly_review,
-                    "analyse-influencer": run_influencer_analysis, "influencer-trend": run_influencer_trend,
+                    "monthly-review": run_monthly_review, 
+                    "weekly-review-by-range": run_weekly_review_by_range,
+                    "weekly-review-by-number": run_weekly_review_by_number,
+                    "analyse-influencer": run_influencer_analysis, 
+                    "influencer-trend": run_influencer_trend,
                     "plan": run_strategic_plan
                 }
                 if handler := main_handler_map.get(new_tool):
@@ -204,15 +204,17 @@ def route_thread_messages(event, say, client):
 
         logger.info(f"Thread message '{user_message}' identified as a follow-up.")
         follow_up_handler_map = {
-            "monthly_review": month_thread_handler, "weekly_review": weekly_thread_handler,
-            "influencer_analysis": influencer_thread_handler, "strategic_plan": plan_thread_handler,
+            "monthly_review": month_thread_handler, 
+            "weekly_review_by_range": weekly_thread_handler,
+            "weekly_review_by_number": weekly_thread_handler,
+            "influencer_analysis": influencer_thread_handler, 
+            "strategic_plan": plan_thread_handler,
             "influencer_trend": trend_thread_handler
         }
         if handler := follow_up_handler_map.get(context.get("type")):
             handler(event, say, client, context)
 
 # --- SLASH COMMANDS ---
-# ... (Slash command section is unchanged but included for completeness) ...
 @app.command("/monthly-review")
 def route_monthly_review(ack, say, command):
     ack()
@@ -236,10 +238,13 @@ def route_weekly_review(ack, say, command):
     tool_name = routing_decision.get("tool_name")
     params = routing_decision.get("parameters", {})
     params = _apply_default_year(params)
-    if tool_name == "weekly-review" and params.get("market"):
-        run_weekly_review(say, initial_response['ts'], params, thread_context_store)
+    
+    if tool_name == "weekly-review-by-range" and params.get("market"):
+        run_weekly_review_by_range(say, initial_response['ts'], params, thread_context_store)
+    elif tool_name == "weekly-review-by-number" and params.get("market"):
+        run_weekly_review_by_number(say, initial_response['ts'], params, thread_context_store)
     else:
-        say("Invalid format. Use `/weekly-review UK from 2025-06-01 to 2025-06-07`", thread_ts=initial_response['ts'])
+        say("Invalid format. Use `/weekly-review UK from 2025-06-01 to 2025-06-07` or `/weekly-review UK week 36`", thread_ts=initial_response['ts'])
 
 @app.command("/analyse-influencer")
 def route_analyse_influencer(ack, say, command):
