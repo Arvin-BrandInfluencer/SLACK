@@ -151,7 +151,13 @@ def run_strategic_plan(client, say, event, thread_ts, params, thread_context_sto
     actual_data_response = query_api(UNIFIED_API_URL, actuals_payload, "Influencer Analytics (Monthly)")
     if "error" in actual_data_response: say(f"API Error: `{actual_data_response['error']}`", thread_ts=thread_ts); return
 
-    target_budget = next((float(m.get("target_budget_clean", 0.0)) for m in target_data.get("monthly_detail", []) if m.get("month") == month_abbr), 0.0)
+    # --- START: BUG FIX ---
+    # The original comparison `m.get("month") == month_abbr` was case-sensitive.
+    # This failed if the data source had 'dec' and the router sent 'Dec'.
+    # The fix is to make the comparison case-insensitive by converting both to lowercase.
+    target_budget = next((float(m.get("target_budget_clean", 0.0)) for m in target_data.get("monthly_detail", []) if str(m.get("month", "")).lower() == str(month_abbr).lower()), 0.0)
+    # --- END: BUG FIX ---
+
     summary = (actual_data_response.get("monthly_data") or [{}])[0].get("summary", {})
     actual_spend = convert_eur_to_local(float(summary.get("total_spend_eur", 0.0)), market)
     booked_influencers = (actual_data_response.get("monthly_data") or [{}])[0].get("details", [])
