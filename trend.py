@@ -68,9 +68,19 @@ def run_influencer_trend(say, thread_ts, params, thread_context_store, user_quer
         if "error" in data:
             say(f"{data['error']} Please try again shortly.", thread_ts=thread_ts); return
         
-        all_influencers = data.get("items", [])
+        # --- START: BUG FIX ---
+        # The 'discovery_tiers' view returns separate lists for 'gold', 'silver', and 'bronze'.
+        # The original code incorrectly looked for a single 'items' key.
+        # This fix combines all tiers into a single list for leaderboard generation.
+        gold_tier = data.get("gold", [])
+        silver_tier = data.get("silver", [])
+        bronze_tier = data.get("bronze", [])
+        all_influencers = gold_tier + silver_tier + bronze_tier
+        # --- END: BUG FIX ---
+
         if not all_influencers:
-            say(f"I couldn't find any trend data for the filters: `{filters}`. You might want to try a broader search.", thread_ts=thread_ts); return
+            filter_str = " | ".join(f"{k.title()}: {v}" for k, v in filters.items() if v)
+            say(f"I couldn't find any trend data for the filters: `{filter_str}`. You might want to try a broader search.", thread_ts=thread_ts); return
         
         logger.info("Generating full trend leaderboards.")
         leaderboards = create_leaderboard_reports(all_influencers, filters)
