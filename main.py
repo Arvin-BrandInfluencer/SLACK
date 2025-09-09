@@ -48,7 +48,7 @@ def route_natural_language_query(query: str):
 
     **RULES:**
     1.  Default `year` to `2025` if not specified.
-    2.  Normalize `market` to UPPER CASE (e.g., "UK", "FRANCE").
+    2.  Normalize market names: "UK" should be "UK" (uppercase). All other countries (e.g., "france", "sweden") should be Sentence Case (e.g., "France", "Sweden").
     3.  If a query contains "week" or "wk" followed by a number (e.g., "week 36", "wk 5 performance"), you MUST prioritize the `weekly-review-by-number` tool.
     4.  If a query contains a specific date range (e.g., "from June 1 to June 15", "on Sep 15th"), you MUST prioritize the `weekly-review-by-range` tool.
     5.  For any tool requiring a `market`, if the user does NOT provide one, you MUST use the `clarify-market` tool. Do NOT return a null market.
@@ -102,11 +102,46 @@ def determine_thread_intent(user_message: str, context: dict):
         logger.error(f"Error determining thread intent: {e}")
         return "follow-up"
 
-def _apply_default_year(params: dict):
-    if not isinstance(params, dict): params = {}
-    if 'year' not in params or not params['year']:
+# --- PARAMETER PROCESSING & NORMALIZATION ---
+def normalize_market_name(market_name: str) -> str:
+    if not market_name or not isinstance(market_name, str):
+        return market_name
+    
+    market_lower = market_name.strip().lower()
+    
+    market_map = {
+        "uk": "UK",
+        "united kingdom": "UK",
+        "gb": "UK",
+        "great britain": "UK",
+        "france": "France",
+        "fr": "France",
+        "sweden": "Sweden",
+        "se": "Sweden",
+        "norway": "Norway",
+        "no": "Norway",
+        "denmark": "Denmark",
+        "dk": "Denmark",
+        "nordics": "Nordics",
+    }
+    
+    # Return mapped value, or capitalize the original if not found as a fallback.
+    return market_map.get(market_lower, market_name.strip().capitalize())
+
+def process_routing_params(params: dict) -> dict:
+    if not isinstance(params, dict):
+        params = {}
+    
+    # Normalize market name
+    if 'market' in params and params.get('market'):
+        params['market'] = normalize_market_name(params['market'])
+        logger.info(f"Normalized market name to: {params['market']}")
+        
+    # Apply default year
+    if 'year' not in params or not params.get('year'):
         params['year'] = 2025
         logger.info("Applied default year: 2025")
+        
     return params
 
 # --- PRIMARY ENTRY POINT: @mention ---
@@ -121,8 +156,7 @@ def handle_app_mention(event, say, client):
     routing_decision = route_natural_language_query(user_query)
 
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
 
     if tool_name == "clarify-market":
         client.chat_update(channel=event['channel'], ts=thinking_message['ts'], text=f"I can help with that! Which market are you interested in for the query: \"_{params.get('original_query')}_\"?")
@@ -173,8 +207,7 @@ def route_thread_messages(event, say, client):
             logger.info(f"Thread message '{user_message}' identified as a new command. Pivoting...")
             routing_decision = route_natural_language_query(user_message)
             new_tool = routing_decision.get("tool_name")
-            params = routing_decision.get("parameters", {})
-            params = _apply_default_year(params)
+            params = process_routing_params(routing_decision.get("parameters", {}))
             
             if new_tool == "clarify-market":
                 say(f"I can do that! Which market are you interested in for: \"_{params.get('original_query')}_\"?", thread_ts=thread_ts)
@@ -222,8 +255,7 @@ def route_monthly_review(ack, say, command):
     initial_response = say(f"Running command `/monthly-review {text}`...")
     routing_decision = route_natural_language_query(f"monthly review for {text.replace('-', ' ')}")
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
     if tool_name == "monthly-review":
         run_monthly_review(say, initial_response['ts'], params, thread_context_store)
     else:
@@ -236,8 +268,7 @@ def route_weekly_review(ack, say, command):
     initial_response = say(f"Running command `/weekly-review {text}`...")
     routing_decision = route_natural_language_query(f"weekly review for {text}")
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
     
     if tool_name == "weekly-review-by-range" and params.get("market"):
         run_weekly_review_by_range(say, initial_response['ts'], params, thread_context_store)
@@ -253,8 +284,7 @@ def route_analyse_influencer(ack, say, command):
     initial_response = say(f"Running command `/analyse-influencer {text}`...")
     routing_decision = route_natural_language_query(f"analyse influencer {text.replace('-', ' ')}")
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
     if tool_name == "analyse-influencer":
         run_influencer_analysis(say, initial_response['ts'], params, thread_context_store)
     else:
@@ -267,8 +297,7 @@ def route_influencer_trend(ack, say, command):
     initial_response = say(f"Running command `/influencer-trend {text}`...")
     routing_decision = route_natural_language_query(f"influencer trends for {text.replace('-', ' ')}")
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
     if tool_name == "influencer-trend":
         run_influencer_trend(say, initial_response['ts'], params, thread_context_store)
     else:
@@ -281,8 +310,7 @@ def route_plan(ack, say, command, client):
     initial_response = say(f"Running command `/plan {text}`...")
     routing_decision = route_natural_language_query(f"plan for {text.replace('-', ' ')}")
     tool_name = routing_decision.get("tool_name")
-    params = routing_decision.get("parameters", {})
-    params = _apply_default_year(params)
+    params = process_routing_params(routing_decision.get("parameters", {}))
     if tool_name == "plan":
          mock_event = {'channel': command.get('channel_id')}
          run_strategic_plan(client, say, mock_event, initial_response['ts'], params, thread_context_store)
